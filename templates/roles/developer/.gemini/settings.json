@@ -1,5 +1,5 @@
 {
     "hooks": {
-        "tool_code": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Bot-Instance-Id: ${INSTANCE_ID}' -H 'X-Discord-Event-Id: ${HOOK_ID}' -H 'Content-Type: application/json' --data-binary @-"
+        "tool_code": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
     }
 }

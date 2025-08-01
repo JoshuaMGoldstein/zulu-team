@@ -42,6 +42,31 @@ class ApiServer {
         });
     }
 
+    private createEventFile(instance: any, eventId: string, messageContent: string) {
+        const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
+        if (!fs.existsSync(eventsDir)) {
+            fs.mkdirSync(eventsDir, { recursive: true });
+        }
+        const eventFilePath = path.join(eventsDir, `${eventId}.json`);
+        const eventData = {
+            id: eventId,
+            source: 'discord',
+            content: messageContent,
+            timestamp: new Date().toISOString()
+        };
+        fs.writeFileSync(eventFilePath, JSON.stringify(eventData, null, 2));
+    }
+
+    private writeLogEntry(instanceId: string, logFilename: string, event: BotOutput) {
+        const logsDir = path.join(__dirname, `../bot-instances/${instanceId}/.logs`);
+        if (!fs.existsSync(logsDir)) {
+            fs.mkdirSync(logsDir, { recursive: true });
+        }
+        const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
+        logStream.write(JSON.stringify(event) + '\n');
+        logStream.end();
+    }
+
     private initDiscordBot(instance: any) {
         const client = this.discordClients.get(instance.id);
         if (client) {
@@ -62,36 +87,15 @@ class ApiServer {
 
                 log(`Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
                 const statusMessage = await message.reply('Processing...');
-
-                // Create .events directory and file
-                const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
-                if (!fs.existsSync(eventsDir)) {
-                    fs.mkdirSync(eventsDir, { recursive: true });
-                }
-                const eventFilePath = path.join(eventsDir, `${eventId}.json`);
-                const eventData = {
-                    id: eventId,
-                    source: 'discord',
-                    content: message.content,
-                    timestamp: new Date().toISOString()
-                };
-                fs.writeFileSync(eventFilePath, JSON.stringify(eventData, null, 2));
-
+                this.createEventFile(instance, eventId, message.content);
 
                 try {
                     let event = await dockerManager.activateBot(instance, message.content, eventId);
                     let fullResponse = '';
-                    const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
-                    if (!fs.existsSync(logsDir)) {
-                        fs.mkdirSync(logsDir, { recursive: true });
-                    }
-                    const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
 
                     while (event) {
-                        if (event.type === BotEventType.STDERR && STDERR_FILTERS.includes(event.output.trim())) {
-                            // Skip logging this event
-                        } else {
-                            logStream.write(JSON.stringify(event) + '\n');
+                        if (!(event.type === BotEventType.STDERR && STDERR_FILTERS.includes(event.output.trim()))) {
+                            this.writeLogEntry(instance.id, logFilename, event);
                         }
 
                         if (event.type === BotEventType.STDOUT) {
@@ -104,7 +108,6 @@ class ApiServer {
                         event = await event.next;
                     }
 
-                    logStream.end();
                     await sendChunkedMessage(statusMessage, fullResponse);
 
                 } catch (error) {
@@ -140,7 +143,9 @@ class ApiServer {
             const instance = this.instances.find((inst: any) => inst.id === botId);
 
             if (instance && instance.enabled) {
-                dockerManager.activateBot(instance, JSON.stringify(event));
+                const eventId = new Date().toISOString();
+                this.createEventFile(instance, eventId, JSON.stringify(event));
+                dockerManager.activateBot(instance, JSON.stringify(event), eventId);
                 res.status(200).json({ message: 'Bot activated' });
             } else {
                 res.status(404).send('Bot not found or is disabled');

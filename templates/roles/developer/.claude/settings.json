@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/pre-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Discord-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/pre-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Discord-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/user-prompt-submit -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Discord-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/user-prompt-submit -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/stop -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/stop -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/subagent-stop -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/subagent-stop -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/pre-compact -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/pre-compact -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/notification -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/notification -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }

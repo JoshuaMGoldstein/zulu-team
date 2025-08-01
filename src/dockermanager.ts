@@ -18,10 +18,16 @@ type PromiseResolver = {
     reject: (reason?: any) => void;
 };
 
+type StoredPromise = {
+    resolver: PromiseResolver;
+    logs: BotOutput[];
+    eventInfo: any;
+};
+
 class DockerManager {
     private instances: any[];
     private instancesPath: string;
-    private openPromises: Map<string, Map<string, PromiseResolver>> = new Map();
+    private openPromises: Map<string, Map<string, StoredPromise>> = new Map();
 
     constructor() {
         this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
@@ -111,10 +117,10 @@ class DockerManager {
     public handleToolCall(instanceId: string, eventId: string, toolCallData: any) {
         const instancePromises = this.openPromises.get(instanceId);
         if (instancePromises && instancePromises.has(eventId)) {
-            const resolver = instancePromises.get(eventId);
-            if (resolver) {
+            const storedPromise = instancePromises.get(eventId);
+            if (storedPromise) {
                 const childProcess = {} as ChildProcess; // A mock or placeholder might be needed if the process object is used
-                resolver.resolve({
+                storedPromise.resolver.resolve({
                     type: BotEventType.TOOLCALL,
                     output: toolCallData,
                     next: this.createNextEventPromise(childProcess, instanceId, eventId),
@@ -125,10 +131,10 @@ class DockerManager {
 
     private createNextEventPromise(child: ChildProcess, instanceId: string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
         return new Promise((resolve, reject) => {
-            if (!this.openPromises.has(instanceId)) {
-                this.openPromises.set(instanceId, new Map());
+            const storedPromise = this.openPromises.get(instanceId)?.get(eventId);
+            if (storedPromise) {
+                storedPromise.resolver = { resolve, reject };
             }
-            this.openPromises.get(instanceId)!.set(eventId, { resolve, reject });
 
             let fullResponse = '';
             const stdoutListener = (data: Buffer) => {
@@ -213,7 +219,50 @@ class DockerManager {
             child.stdin.end();
         }
 
-        return this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage);
+        return new Promise((resolve, reject) => {
+            if (!this.openPromises.has(instance.id)) {
+                this.openPromises.set(instance.id, new Map());
+            }
+            this.openPromises.get(instance.id)!.set(eventTimestamp, {
+                resolver: { resolve, reject },
+                logs: [],
+                eventInfo: {
+                    id: eventTimestamp,
+                    source: 'discord',
+                    content: messageContent,
+                    timestamp: new Date().toISOString()
+                }
+            });
+
+            child.stdout?.once('data', (data: Buffer) => {
+                resolve({
+                    type: BotEventType.STDOUT,
+                    output: data.toString(),
+                    next: this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage),
+                });
+            });
+
+            child.stderr?.once('data', (data: Buffer) => {
+                resolve({
+                    type: BotEventType.STDERR,
+                    output: data.toString(),
+                    next: this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage),
+                });
+            });
+
+            child.once('close', (code: number) => {
+                this.openPromises.get(instance.id)?.delete(eventTimestamp);
+                resolve({
+                    type: BotEventType.CLOSE,
+                    output: `Process exited with code ${code}`,
+                });
+            });
+
+            child.once('error', (err: Error) => {
+                this.openPromises.get(instance.id)?.delete(eventTimestamp);
+                reject(err);
+            });
+        });
     }
 }
 

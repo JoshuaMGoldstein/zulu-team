@@ -28,6 +28,7 @@
     "dotenv": "^17.2.1",
     "express": "^4.19.2",
     "nodemon": "^3.1.0",
+    "sonyflake": "^1.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   }

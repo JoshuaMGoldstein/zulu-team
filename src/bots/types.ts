@@ -10,6 +10,19 @@ export enum GeminiModels {
     GEMINI_2_0_FLASH = "gemini-2.0-flash",
 }
 
+export enum BotEventType {
+    STDOUT = 'STDOUT',
+    STDERR = 'STDERR',
+    TOOLCALL = 'TOOLCALL',
+    CLOSE = 'CLOSE',
+}
+
+export interface BotOutput {
+    type: BotEventType;
+    output: string | any; // string for stdout/stderr/close, any for tool call
+    next?: Promise<BotOutput>;
+}
+
 export interface Bot {
     id: string;
     role: 'developer' | 'project-manager';

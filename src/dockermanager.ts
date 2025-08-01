@@ -1,19 +1,27 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { log } from './utils/log';
 import * as dotenv from 'dotenv';
+import { BotOutput, BotEventType } from './bots/types';
 import { Message } from 'discord.js';
+import { sendChunkedMessage } from './utils/discord';
 
 dotenv.config();
 
 const execAsync = promisify(exec);
 
+type PromiseResolver = {
+    resolve: (output: BotOutput) => void;
+    reject: (reason?: any) => void;
+};
+
 class DockerManager {
     private instances: any[];
     private instancesPath: string;
+    private openPromises: Map<string, Map<string, PromiseResolver>> = new Map();
 
     constructor() {
         this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
@@ -100,30 +108,89 @@ class DockerManager {
         }
     }
 
-    public activateBot(instance: any, messageContent?: string, eventId?: string, statusMessage?: Message) {
-        const eventTimestamp = eventId || new Date().toISOString();
-        const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.${instance.cli}-events`);
-        if (!fs.existsSync(eventsDir)) {
-            fs.mkdirSync(eventsDir, { recursive: true });
+    public handleToolCall(instanceId: string, eventId: string, toolCallData: any) {
+        const instancePromises = this.openPromises.get(instanceId);
+        if (instancePromises && instancePromises.has(eventId)) {
+            const resolver = instancePromises.get(eventId);
+            if (resolver) {
+                const childProcess = {} as ChildProcess; // A mock or placeholder might be needed if the process object is used
+                resolver.resolve({
+                    type: BotEventType.TOOLCALL,
+                    output: toolCallData,
+                    next: this.createNextEventPromise(childProcess, instanceId, eventId),
+                });
+            }
         }
+    }
 
-        const eventFileName = `${eventTimestamp}.json`;
-        const eventFilePath = path.join(eventsDir, eventFileName);
+    private createNextEventPromise(child: ChildProcess, instanceId: string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
+        return new Promise((resolve, reject) => {
+            if (!this.openPromises.has(instanceId)) {
+                this.openPromises.set(instanceId, new Map());
+            }
+            this.openPromises.get(instanceId)!.set(eventId, { resolve, reject });
 
-        const eventData = {
-            id: eventTimestamp,
-            source: 'discord', // Or other source
-            content: messageContent,
-            timestamp: new Date().toISOString()
-        };
-        fs.writeFileSync(eventFilePath, JSON.stringify(eventData, null, 2));
+            let fullResponse = '';
+            const stdoutListener = (data: Buffer) => {
+                const output = data.toString();
+                fullResponse += output;
+                if (statusMessage) {
+                    sendChunkedMessage(statusMessage, fullResponse);
+                }
+                cleanup();
+                resolve({
+                    type: BotEventType.STDOUT,
+                    output: output,
+                    next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
+                });
+            };
 
+            const stderrListener = (data: Buffer) => {
+                cleanup();
+                resolve({
+                    type: BotEventType.STDERR,
+                    output: data.toString(),
+                    next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
+                });
+            };
+
+            const closeListener = (code: number) => {
+                cleanup();
+                this.openPromises.get(instanceId)?.delete(eventId);
+                resolve({
+                    type: BotEventType.CLOSE,
+                    output: `Process exited with code ${code}`,
+                });
+            };
+
+            const errorListener = (err: Error) => {
+                cleanup();
+                this.openPromises.get(instanceId)?.delete(eventId);
+                reject(err);
+            };
+
+            const cleanup = () => {
+                child.stdout?.removeListener('data', stdoutListener);
+                child.stderr?.removeListener('data', stderrListener);
+                child.removeListener('close', closeListener);
+                child.removeListener('error', errorListener);
+            };
+
+            child.stdout?.once('data', stdoutListener);
+            child.stderr?.once('data', stderrListener);
+            child.once('close', closeListener);
+            child.once('error', errorListener);
+        });
+    }
+
+    public activateBot(instance: any, messageContent?: string, eventId?: string, statusMessage?: Message): Promise<BotOutput> {
+        const eventTimestamp = eventId || new Date().toISOString();
         const containerName = `zulu-instance-${instance.id}`;
         let cliCommand: string;
 
         if (instance.cli === 'gemini') {
             cliCommand = 'gemini --autosave --resume --yolo';
-        } else { // claude
+        } else {
             cliCommand = `claude --dangerously-skip-permissions --continue --model ${instance.model}`;
         }
 
@@ -146,25 +213,7 @@ class DockerManager {
             child.stdin.end();
         }
 
-        let fullResponse = '';
-        child.stdout.on('data', (data) => {
-            const output = data.toString();
-            fullResponse += output;
-            log(`[${instance.id}] stdout: ${output}`);
-            if (statusMessage) {
-                // This is a simplified version. A more robust implementation would
-                // use a proper function to handle chunking and editing.
-                statusMessage.edit(fullResponse.slice(0, 2000));
-            }
-        });
-
-        child.stderr.on('data', (data) => {
-            log(`[${instance.id}] stderr: ${data}`);
-        });
-
-        child.on('close', (code) => {
-            log(`[${instance.id}] child process exited with code ${code}`);
-        });
+        return this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage);
     }
 }
 

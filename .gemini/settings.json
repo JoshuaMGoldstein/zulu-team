@@ -1,0 +1,5 @@
+{
+    "hooks": {
+        "tool_call": "curl -X POST http://localhost:3030/hook/tool_call -H 'X-Bot-Instance-Id: sys' -H 'X-Discord-Event-Id: ${HOOK_ID}' -H 'Content-Type: application/json' --data-binary @-"
+    }
+}

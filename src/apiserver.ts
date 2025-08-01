@@ -1,40 +1,13 @@
 import { createServer } from './server';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Bot } from './bots/types';
-import { Client, GatewayIntentBits, Events, Message, TextChannel } from 'discord.js';
+import { Bot, BotEventType, BotOutput } from './bots/types';
+import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
 import dockerManager from './dockermanager';
 import express from 'express';
 import { log } from './utils/log';
-
-const MAX_MESSAGE_LENGTH = 2000;
-
-const sendChunkedMessage = async (statusMessage: Message, content: string) => {
-    if (!content) return;
-
-    try {
-        let channel = statusMessage.channel as TextChannel;
-        if (content.length <= MAX_MESSAGE_LENGTH) {
-            await statusMessage.edit(content);
-            return;
-        }
-
-        const chunks = [];
-        for (let i = 0; i < content.length; i += MAX_MESSAGE_LENGTH) {
-            chunks.push(content.substring(i, i + MAX_MESSAGE_LENGTH));
-        }
-
-        await statusMessage.edit(chunks[0]);
-
-        if (channel instanceof TextChannel) {
-            for (let i = 1; i < chunks.length; i++) {
-                await channel.send(chunks[i]);
-            }
-        }
-    } catch (e) {
-        log('Error sending discord message: ' + e);
-    }
-};
+import { sendChunkedMessage } from './utils/discord';
+import { STDERR_FILTERS } from './utils/filters';
 
 class ApiServer {
     private app: express.Application;
@@ -83,9 +56,61 @@ class ApiServer {
 
         newClient.on(Events.MessageCreate, async message => {
             if (newClient.user && message.channel.id === instance.discordChannelId && !message.author.bot && message.mentions.has(newClient.user.id)) {
-                log(`Message received for ${instance.name}: ${message.content}`);
+                const eventId = new Date().toISOString();
+                const safeEventId = eventId.replace(/[:.]/g, '-');
+                const logFilename = `${safeEventId}_${message.id}.jsonl`;
+
+                log(`Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
                 const statusMessage = await message.reply('Processing...');
-                dockerManager.activateBot(instance, message.content, undefined, statusMessage);
+
+                // Create .events directory and file
+                const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
+                if (!fs.existsSync(eventsDir)) {
+                    fs.mkdirSync(eventsDir, { recursive: true });
+                }
+                const eventFilePath = path.join(eventsDir, `${eventId}.json`);
+                const eventData = {
+                    id: eventId,
+                    source: 'discord',
+                    content: message.content,
+                    timestamp: new Date().toISOString()
+                };
+                fs.writeFileSync(eventFilePath, JSON.stringify(eventData, null, 2));
+
+
+                try {
+                    let event = await dockerManager.activateBot(instance, message.content, eventId);
+                    let fullResponse = '';
+                    const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
+                    if (!fs.existsSync(logsDir)) {
+                        fs.mkdirSync(logsDir, { recursive: true });
+                    }
+                    const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
+
+                    while (event) {
+                        if (event.type === BotEventType.STDERR && STDERR_FILTERS.includes(event.output.trim())) {
+                            // Skip logging this event
+                        } else {
+                            logStream.write(JSON.stringify(event) + '\n');
+                        }
+
+                        if (event.type === BotEventType.STDOUT) {
+                            fullResponse += event.output;
+                        }
+
+                        if (!event.next) {
+                            break;
+                        }
+                        event = await event.next;
+                    }
+
+                    logStream.end();
+                    await sendChunkedMessage(statusMessage, fullResponse);
+
+                } catch (error) {
+                    log(`Error processing bot command for event ${eventId}:`, error);
+                    await statusMessage.edit('An error occurred while processing your request.');
+                }
             }
         });
 
@@ -119,6 +144,20 @@ class ApiServer {
                 res.status(200).json({ message: 'Bot activated' });
             } else {
                 res.status(404).send('Bot not found or is disabled');
+            }
+        });
+
+        this.app.post('/hook/:hookType', (req, res) => {
+            const instanceId = req.header('X-Instance-Id');
+            const eventId = req.header('X-Discord-Event-Id');
+            const hookData = req.body;
+
+            if (instanceId && eventId) {
+                log(`Received tool call for ${instanceId} (Event ID: ${eventId})`);
+                dockerManager.handleToolCall(instanceId, eventId, hookData);
+                res.status(200).send();
+            } else {
+                res.status(400).send('Missing X-Instance-Id or X-Discord-Event-Id header');
             }
         });
     }

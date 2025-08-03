@@ -5,9 +5,11 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { log } from './utils/log';
 import * as dotenv from 'dotenv';
-import { BotOutput, BotEventType } from './bots/types';
+import { Bot, BotOutput, BotEvent, BotEventType } from './bots/types';
+import { GeminiToolCall } from './bots/gemini';
 import { Message } from 'discord.js';
 import { sendChunkedMessage } from './utils/discord';
+import templateManager from './templatemanager';
 
 dotenv.config();
 
@@ -18,14 +20,15 @@ type PromiseResolver = {
     reject: (reason?: any) => void;
 };
 
-type StoredPromise = {
+export type StoredPromise = {
     resolver: PromiseResolver;
     logs: BotOutput[];
-    eventInfo: any;
+    eventInfo: BotEvent;
+    child: ChildProcess;
 };
 
 class DockerManager {
-    private instances: any[];
+    private instances: Bot[];
     private instancesPath: string;
     private openPromises: Map<string, Map<string, StoredPromise>> = new Map();
 
@@ -33,6 +36,20 @@ class DockerManager {
         this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
         this.instances = [];
         this.loadInstances();
+    }
+
+    public getOpenEventByInstanceAndEventId(instanceId:string, eventId:string):BotEvent|undefined {
+        const instancePromises = this.openPromises.get(instanceId);
+        if (instancePromises && instancePromises.has(eventId)) {
+            let openPromise = instancePromises.get(eventId);            
+            if(openPromise) {
+                return openPromise.eventInfo;
+            } else {
+                return undefined;
+            }
+        } else {
+            return undefined;
+        }
     }
 
     private loadInstances() {
@@ -81,11 +98,12 @@ class DockerManager {
                     log(`Container ${containerName} not found. Starting...`);
                     await this.startBotContainer(instance);
                 }
+                templateManager.applyTemplates(instance);
             }
         }
     }
 
-    private async startBotContainer(instance: any) {
+    private async startBotContainer(instance: Bot) {
         const imageName = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
         const containerName = `zulu-instance-${instance.id}`;
         const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
@@ -95,7 +113,12 @@ class DockerManager {
             envVars = `-e GEMINI_API_KEY=${process.env.GEMINI_API_KEY}`;
         }
 
-        const command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" --network=host ${envVars} ${imageName} sleep infinity`;
+        let command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" --network=host ${envVars} ${imageName} sleep infinity`;
+
+        if (instance.role === 'project-manager' || instance.role === 'qa') {
+            const botInstancesPath = path.resolve(__dirname, '../bot-instances');
+            command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" -v "${botInstancesPath}:/workspace/bot-instances" --network=host ${envVars} ${imageName} sleep infinity`;
+        }
 
         try {
             await execAsync(command);
@@ -114,16 +137,15 @@ class DockerManager {
         }
     }
 
-    public handleToolCall(instanceId: string, eventId: string, toolCallData: any) {
+    public handleToolCall(instanceId: string, eventId: string, toolCallData: GeminiToolCall) {
         const instancePromises = this.openPromises.get(instanceId);
         if (instancePromises && instancePromises.has(eventId)) {
             const storedPromise = instancePromises.get(eventId);
             if (storedPromise) {
-                const childProcess = {} as ChildProcess; // A mock or placeholder might be needed if the process object is used
                 storedPromise.resolver.resolve({
                     type: BotEventType.TOOLCALL,
                     output: toolCallData,
-                    next: this.createNextEventPromise(childProcess, instanceId, eventId),
+                    next: this.createNextEventPromise(storedPromise.child, instanceId, eventId),
                 });
             }
         }
@@ -140,9 +162,9 @@ class DockerManager {
             const stdoutListener = (data: Buffer) => {
                 const output = data.toString();
                 fullResponse += output;
-                if (statusMessage) {
-                    sendChunkedMessage(statusMessage, fullResponse);
-                }
+//                if (statusMessage) {
+//                    sendChunkedMessage(statusMessage, fullResponse);
+//                }
                 cleanup();
                 resolve({
                     type: BotEventType.STDOUT,
@@ -189,31 +211,38 @@ class DockerManager {
         });
     }
 
-    public activateBot(instance: any, messageContent?: string, eventId?: string, statusMessage?: Message): Promise<BotOutput> {
-        const eventTimestamp = eventId || new Date().toISOString();
+    public activateBot(instance: Bot, event:BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        //const eventTimestamp = event.getDate()
+        let messageContent = JSON.stringify(event.getSummary());
+        
         const containerName = `zulu-instance-${instance.id}`;
         let cliCommand: string;
 
         if (instance.cli === 'gemini') {
-            cliCommand = 'gemini --autosave --resume --yolo';
+            cliCommand = 'cd /workspace && gemini --autosave --resume --yolo';
         } else {
-            cliCommand = `claude --dangerously-skip-permissions --continue --model ${instance.model}`;
+            cliCommand = `cd /workspace && claude --dangerously-skip-permissions --continue --model ${instance.model}`;
         }
 
-        const env = {
-            ...process.env,
-            DISCORD_EVENT_ID: eventTimestamp,
+        const env: { [key: string]: string } = {
+            EVENT_ID: event.id,
             INSTANCE_ID: instance.id,
-            API_URL: 'http://host.docker.internal:3001'
+            API_URL: templateManager.getApiUrl()
         };
 
         log(`Activating bot ${instance.id} in container ${containerName}`);
 
-        const child = spawn('docker', ['exec', '-i', containerName, 'bash', '-c', cliCommand], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            env: env
+        const spawnArgs = ['exec', '-i'];
+        for (const key in env) {
+            spawnArgs.push('-e', `${key}=${env[key]}`);
+        }
+        spawnArgs.push(containerName, 'bash', '-c', cliCommand);
+
+        const child = spawn('docker', spawnArgs, {
+            stdio: ['pipe', 'pipe', 'pipe']
         });
 
+        
         if (messageContent) {
             child.stdin.write(messageContent);
             child.stdin.end();
@@ -223,22 +252,18 @@ class DockerManager {
             if (!this.openPromises.has(instance.id)) {
                 this.openPromises.set(instance.id, new Map());
             }
-            this.openPromises.get(instance.id)!.set(eventTimestamp, {
+            this.openPromises.get(instance.id)!.set(event.id, {
                 resolver: { resolve, reject },
                 logs: [],
-                eventInfo: {
-                    id: eventTimestamp,
-                    source: 'discord',
-                    content: messageContent,
-                    timestamp: new Date().toISOString()
-                }
+                eventInfo: event,
+                child: child
             });
 
             child.stdout?.once('data', (data: Buffer) => {
                 resolve({
                     type: BotEventType.STDOUT,
                     output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage),
+                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
                 });
             });
 
@@ -246,12 +271,12 @@ class DockerManager {
                 resolve({
                     type: BotEventType.STDERR,
                     output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, eventTimestamp, statusMessage),
+                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
                 });
             });
 
             child.once('close', (code: number) => {
-                this.openPromises.get(instance.id)?.delete(eventTimestamp);
+                this.openPromises.get(instance.id)?.delete(event.id);
                 resolve({
                     type: BotEventType.CLOSE,
                     output: `Process exited with code ${code}`,
@@ -259,7 +284,7 @@ class DockerManager {
             });
 
             child.once('error', (err: Error) => {
-                this.openPromises.get(instance.id)?.delete(eventTimestamp);
+                this.openPromises.get(instance.id)?.delete(event.id);
                 reject(err);
             });
         });

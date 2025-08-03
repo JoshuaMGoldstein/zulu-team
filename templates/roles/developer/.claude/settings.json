@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/pre-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/pre-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H \"X-Event-Id: ${DISCORD_EVENT_ID}\" -H 'Content-Type: application/json' --data-binary @-"
+            "command": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
           }
         ]
       }

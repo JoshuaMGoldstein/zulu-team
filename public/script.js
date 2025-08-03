@@ -160,7 +160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (element.type === 'checkbox') {
                 botData[key] = element.checked;
             } else if ((element.tagName === 'INPUT' || element.tagName === 'SELECT') && element.value) {
-                if (key === 'managedProjects') {
+                if (key === 'managedProjects' || key === 'discordChannelId') {
                     botData[key] = element.value.split(',').map(s => s.trim()).filter(s => s);
                 } else {
                     botData[key] = element.value;

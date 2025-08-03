@@ -1,35 +1,49 @@
 import { createServer } from './server';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Bot, BotEventType, BotOutput } from './bots/types';
-import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
+import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project } from './bots/types';
+import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
+import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';
 import dockerManager from './dockermanager';
 import express from 'express';
 import { log } from './utils/log';
 import { sendChunkedMessage } from './utils/discord';
 import { STDERR_FILTERS } from './utils/filters';
-import { generateEventId } from './utils/id';
+import { generateEventId } from './utils/snowflake';
+import { parseCodeBlocks } from './utils/parsers';
+
+import {BotEvent,DiscordBotEvent,DelegationBotEvent} from './bots/types';
+import dockermanager from './dockermanager';
+
+const MAX_ATTEMPTS = 5;
+
 
 class ApiServer {
     private app: express.Application;
-    private instances: any[];
+    private instances: Bot[];
+    private projects: Project[];
     private instancesPath: string;
+    private projectsPath: string;
     private discordClients: Map<string, Client> = new Map();
 
     constructor() {
         this.app = createServer();
+        this.app.use(express.json());
         this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
+        this.projectsPath = path.join(__dirname, '../bot-instances/projects.json');
         this.instances = [];
-        this.loadInstances();
+        this.projects = [];
+        this.loadConfigs();
         this.setupRoutes();
     }
 
-    private loadInstances() {
+    private loadConfigs() {
         this.instances = JSON.parse(fs.readFileSync(this.instancesPath, 'utf-8'));
+        this.projects = JSON.parse(fs.readFileSync(this.projectsPath, 'utf-8'));
     }
 
     public initBots(instanceIds?: string[]) {
-        this.loadInstances();
+        this.loadConfigs();
         dockerManager.initBots(instanceIds);
 
         const instancesToInit = instanceIds
@@ -43,23 +57,17 @@ class ApiServer {
         });
     }
 
-    private createEventFile(instance: any, eventId: string, messageContent: string) {
+    private createEventFile(instance: Bot, event: BotEvent) {
         const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
         if (!fs.existsSync(eventsDir)) {
             fs.mkdirSync(eventsDir, { recursive: true });
         }
-        const eventFilePath = path.join(eventsDir, `${eventId}.json`);
-        const eventData = {
-            id: eventId,
-            source: 'discord',
-            content: messageContent,
-            timestamp: new Date().toISOString()
-        };
-        fs.writeFileSync(eventFilePath, JSON.stringify(eventData, null, 2));
+        const eventFilePath = path.join(eventsDir, `${event.id}.json`);
+        fs.writeFileSync(eventFilePath, JSON.stringify(event, null, 2));
     }
 
-    private writeLogEntry(instanceId: string, logFilename: string, event: BotOutput) {
-        const logsDir = path.join(__dirname, `../bot-instances/${instanceId}/.logs`);
+    private writeLogEntry(instance: Bot, logFilename: string, event: BotOutput) {
+        const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
         if (!fs.existsSync(logsDir)) {
             fs.mkdirSync(logsDir, { recursive: true });
         }
@@ -68,7 +76,185 @@ class ApiServer {
         logStream.end();
     }
 
-    private initDiscordBot(instance: any) {
+    private async createStatusMessageIfApplicable(targetInstance:Bot, event:BotEvent):Promise<Message|undefined> {
+        let statusMessage:Message|undefined =undefined;
+         
+        // //Allow other kinds of comms replies (email, slack), etc
+        if(event instanceof DiscordBotEvent) {
+            let discordBotEvent = event as DiscordBotEvent;
+            statusMessage = await discordBotEvent.message.reply('Processing...');
+        } else if(event instanceof DelegationBotEvent) {
+            let commsEvent = event.commsEvent;
+            if(commsEvent instanceof DiscordBotEvent) {
+                let discordCommsEvent = commsEvent as DiscordBotEvent;
+                let discordClient = this.discordClients.get(targetInstance.id);
+                if(discordClient) {
+                    try {
+                        const channel = await discordClient.channels.fetch(commsEvent.message.channelId);
+                        if(channel) {
+                            if(channel instanceof TextChannel) {
+                                statusMessage = await ( channel as TextChannel).send('Received Delegation Request - Processing...');
+                            } else {
+                                console.error('Channel is not a text channel',channel);
+                            }
+                        } else {
+                            console.error('Channel not found:',channel);
+                        }
+                    } catch(error) {
+                        console.error('Error fetching channel or sending status message', error);
+                    }
+                }
+            } else { //TODO: Allow other kinds of comms initialtion (email, slack), etc
+                console.error('No originating comms event found for delegation event ', event);
+                
+            } 
+        }
+        return statusMessage;
+    }
+
+    private async handleDelegatedBotFlow(fromInstance:Bot, targetInstance: Bot, event:DelegationBotEvent) {
+        if(targetInstance.id == fromInstance.id) {
+            console.error("tried to delegate event from and to same instance id: "+fromInstance.id, event);
+            return;
+        }
+        this.handleBotFlow(targetInstance, event);
+    }
+
+    private async handleBotFlow(targetInstance: Bot, event: BotEvent) {
+        this.createEventFile(targetInstance, event);        
+        log(`Activating bot ${targetInstance.id} for event ${event.id}`);
+
+        let statusMessage:Message|undefined = await this.createStatusMessageIfApplicable(targetInstance, event);    
+
+        try {
+            let botOutput = await dockerManager.activateBot(targetInstance, event, statusMessage);
+            let fullResponse = '';
+            const logFilename = `${event.id}.jsonl`;
+
+            while (botOutput) {
+                if (!(botOutput.type === BotEventType.STDERR && STDERR_FILTERS.includes(botOutput.output.trim()))) {
+                    this.writeLogEntry(targetInstance, logFilename, botOutput);
+                }
+
+                if (botOutput.type === BotEventType.STDOUT) {
+                    fullResponse += botOutput.output;
+
+                } else if(botOutput.type == BotEventType.TOOLCALL) {
+                    if (statusMessage) {
+                        //Fixme: Support Claude etc
+                        let geminiToolCall = botOutput.output as GeminiToolCall;
+                        let [toolMsg,toolOutput,toolOutputFormat] = getGeminiToolCallOutputAndFormat(geminiToolCall);
+                        
+                        await sendChunkedMessage(statusMessage, toolMsg);
+                        await sendChunkedMessage(statusMessage, toolOutput, toolOutputFormat);
+                    }           
+                }
+
+                if (!botOutput.next) {
+                    break;
+                }
+                botOutput = await botOutput.next;
+            }
+
+            if (statusMessage) {
+                await sendChunkedMessage(statusMessage, fullResponse);
+            }                    
+    
+            if(event instanceof DelegationBotEvent) {  // Continue the flow
+                let delegationBotEvent = event as DelegationBotEvent;
+                if(!delegationBotEvent.final) {
+                    this.processDelegationBotResponse(targetInstance, event, fullResponse);
+                }
+            }
+        } catch (error) {
+            log(`Error processing bot command for event ${event.id}:`, error);
+            if (statusMessage) {
+                await statusMessage.edit('An error occurred while processing your request.');
+            }
+        }
+    }
+
+    private async processDelegationBotResponse(fromInstance: Bot, originalEvent: DelegationBotEvent, response: string) {        
+        console.log("Received response from instance:"+fromInstance.id +": "+response);
+        const parsed = parseCodeBlocks(response);
+        let responseJson: any;
+        try {            
+            if (parsed.json && parsed.json.length > 0) {
+                responseJson = JSON.parse(parsed.json[0]);
+            } else {
+                responseJson = { task_status: 'problem', message: 'No JSON response found', notes: response };
+            }
+        } catch (error) {
+            console.log("Failed to parse json response from bot instance: "+fromInstance.id);
+            responseJson = { task_status: 'problem', message: 'Invalid JSON response', notes: response };
+        }
+
+        const project = this.projects.find(p => p.name === originalEvent.project);                
+        const delegator = this.instances.find(i => i.id === originalEvent.delegator_botid);
+        const developer = this.instances.find(i => i.id === originalEvent.assignedTo);
+
+    
+        
+        const nextEvent = new DelegationBotEvent({
+            id: generateEventId(),
+            project: originalEvent.project,
+            task_description: originalEvent.task_description,
+            notes: responseJson.notes??'',
+            data: originalEvent.data,
+            delegator_botid: originalEvent.delegator_botid,
+            assignedTo: originalEvent.assignedTo, //developer.id
+            commsEvent: originalEvent.commsEvent,
+            attempts: (originalEvent.attempts || 0) + 1,
+        });
+
+
+
+        // 1. Handle problems
+        if (!project || responseJson.task_status === 'problem') {
+            if(!project) {
+                responseJson.task_status = 'problem';
+                responseJson.message = `Project ${originalEvent.project} not found`;
+            }
+
+            if (delegator) {
+                nextEvent.final=true;
+                log(`Task failed for project ${originalEvent.project}. Notifying ${delegator.id}.`);                                
+                this.handleDelegatedBotFlow(fromInstance, delegator, nextEvent);
+            }
+            return;
+        } else if (fromInstance.role === 'developer' && (responseJson.task_status === 'complete' || responseJson.task_status === 'progress')) { 
+            // 2. Handle QA flow
+            const qaBot = this.instances.find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
+            if (qaBot) {
+                log(`Developer task complete for ${project.name}. Delegating to QA bot ${qaBot.id}.`);                                
+                this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);
+                return;
+            }
+        } else if (fromInstance.role === 'qa' && responseJson.task_status === 'failed') { 
+            // 3. Handle QA failure (and max attempts)
+            const developer = this.instances.find(i => i.id === originalEvent.assignedTo);
+            if (developer && nextEvent.attempts < MAX_ATTEMPTS) {
+                log(`QA failed for ${project.name}. Sending back to developer ${developer.id}.`);
+                                
+                this.handleDelegatedBotFlow(fromInstance, developer, nextEvent);
+            } else if (delegator) {
+                log(`QA failed for ${project.name} after max attempts. Notifying ${delegator.id}.`);
+                                
+                nextEvent.final=true;
+                this.handleDelegatedBotFlow(fromInstance, delegator, nextEvent);
+            }
+            return;
+        } else if (delegator && nextEvent.attempts < MAX_ATTEMPTS+1) { 
+            // 4. Default: report back to delegator. If MAX_ATTEMPTS +1 exceeded, we might be in a infinite loop
+            log(`Task flow complete for project ${project.name}. Notifying ${delegator.id}.`);
+            nextEvent.final=true;
+            this.handleDelegatedBotFlow(fromInstance, delegator, nextEvent);
+        } else {
+            console.error(`Error in processDelegationBotResponse, delegator=${delegator?delegator.id:'?'}, attempts=${nextEvent?nextEvent.attempts:'?'}`)
+        }
+    }
+
+    private initDiscordBot(instance: Bot) {
         const client = this.discordClients.get(instance.id);
         if (client) {
             client.destroy();
@@ -81,39 +267,16 @@ class ApiServer {
         });
 
         newClient.on(Events.MessageCreate, async message => {
-            if (newClient.user && message.channel.id === instance.discordChannelId && !message.author.bot && message.mentions.has(newClient.user.id)) {
+            const allowedChannelIds = instance.discordChannelId;
+            const isListening = Array.isArray(allowedChannelIds) ? allowedChannelIds.includes(message.channel.id) : allowedChannelIds === message.channel.id;
+
+            if (newClient.user && isListening && !message.author.bot && message.mentions.has(newClient.user.id)) {
                 const eventId = generateEventId();
-                const logFilename = `${eventId}.jsonl`;
-
-                log(`Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
-                const statusMessage = await message.reply('Processing...');
-                this.createEventFile(instance, eventId, message.content);
-
-                try {
-                    let event = await dockerManager.activateBot(instance, message.content, eventId);
-                    let fullResponse = '';
-
-                    while (event) {
-                        if (!(event.type === BotEventType.STDERR && STDERR_FILTERS.includes(event.output.trim()))) {
-                            this.writeLogEntry(instance.id, logFilename, event);
-                        }
-
-                        if (event.type === BotEventType.STDOUT) {
-                            fullResponse += event.output;
-                        }
-
-                        if (!event.next) {
-                            break;
-                        }
-                        event = await event.next;
-                    }
-
-                    await sendChunkedMessage(statusMessage, fullResponse);
-
-                } catch (error) {
-                    log(`Error processing bot command for event ${eventId}:`, error);
-                    await statusMessage.edit('An error occurred while processing your request.');
-                }
+                log(`Discord Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
+                
+                const discordBotEvent = new DiscordBotEvent({id: generateEventId(),message:message});
+                
+                this.handleBotFlow(instance, discordBotEvent);
             }
         });
 
@@ -123,7 +286,7 @@ class ApiServer {
 
     private setupRoutes() {
         this.app.get('/bots', (req, res) => {
-            this.loadInstances();
+            this.loadConfigs();
             const bots: Bot[] = this.instances.map((instance: any) => {
                 const settingsPath = path.join(__dirname, `../bot-instances/${instance.id}/.${instance.cli}/settings.json`);
                 const mdPath = path.join(__dirname, `../bot-instances/${instance.id}/${instance.cli.toUpperCase()}.md`);
@@ -136,35 +299,23 @@ class ApiServer {
             res.json(bots);
         });
 
-        this.app.post('/bots/:id/events', (req, res) => {
-            this.loadInstances();
-            const botId = req.params.id;
-            const event = req.body;
-            const instance = this.instances.find((inst: any) => inst.id === botId);
-
-            if (instance && instance.enabled) {
-                const eventId = generateEventId();
-                this.createEventFile(instance, eventId, JSON.stringify(event));
-                dockerManager.activateBot(instance, JSON.stringify(event), eventId);
-                res.status(200).json({ message: 'Bot activated' });
-            }
-            else {
-                res.status(404).send('Bot not found or is disabled');
-            }
-        });
-
         this.app.post('/hook/:hookType', (req, res) => {
             const instanceId = req.header('X-Instance-Id');
-            const eventId = req.header('X-Discord-Event-Id');
-            const hookData = req.body;
+            const eventId = req.header('X-Event-Id');
+            
+            //Fixme: Support both Gemini and Claude tool call format. Maybe a diff endpoint is easiest?        
+            const hookData:GeminiToolCall = req.body;            
 
             if (instanceId && eventId) {
-                log(`Received tool call for ${instanceId} (Event ID: ${eventId})`);
+                log(`Received tool call for ${instanceId} (Event ID: ${eventId})`);                
+                if(hookData.toolCall && hookData.toolCall.name && hookData.toolCall.args) {
+                    log(` - tool: ${hookData.toolCall.name} | args: ${JSON.stringify(hookData.toolCall.args)}`);
+                }
+
                 dockerManager.handleToolCall(instanceId, eventId, hookData);
                 res.status(200).send();
-            }
-            else {
-                res.status(400).send('Missing X-Instance-Id or X-Discord-Event-Id header');
+            } else {
+                res.status(400).send('Missing X-Instance-Id or X-Event-Id header');
             }
         });
 
@@ -176,31 +327,62 @@ class ApiServer {
             if (instanceId && eventId) {
                 log(`Received log from ${instanceId} (Event ID: ${eventId})`, logData);
                 res.status(200).send();
-            }
-            else {
+            } else {
                 res.status(400).send('Missing X-Instance-Id or X-Event-Id header');
             }
         });
 
         this.app.post('/instance/:instanceId/delegated-task', (req, res) => {
-            this.loadInstances();
+            this.loadConfigs();
             const targetInstanceId = req.params.instanceId;
             const taskData = req.body;
             const delegatorId = req.header('X-Instance-Id');
+            const originalEventId = req.header('X-Event-Id');            
+
 
             const targetInstance = this.instances.find((inst: any) => inst.id === targetInstanceId);
 
-            if (targetInstance && targetInstance.enabled) {
-                const eventId = generateEventId();
-                const eventContent = {
-                    ...taskData,
-                    delegator_botid: delegatorId,
-                };
-                this.createEventFile(targetInstance, eventId, JSON.stringify(eventContent));
-                dockerManager.activateBot(targetInstance, JSON.stringify(eventContent), eventId);
-                res.status(200).json({ message: 'Task delegated' });
+            if(!originalEventId) {res.status(404).send('No X-Event-Id Header provided'); return; }
+            if(!delegatorId) { res.status(404).send('No X-Instance-Id Header provided'); return; }
+            if(!taskData.task_description || typeof(taskData.task_description) !== 'string' || 
+                !taskData.project || typeof(taskData.project) !== 'string') {
+                res.status(404).send('Bad task data provided'); return; 
             }
-            else {
+            
+            //Find the comms Event specified by X-Event-ID
+            //The problem is that the activateBot() on zulu-manager occurs with the X-Event-Id of the delegation event, so its not actually a comms even that he finds...
+            let openEvent = dockermanager.getOpenEventByInstanceAndEventId(delegatorId, originalEventId);
+            let commsEvent = null;
+            if(!openEvent) {
+                res.status(400).send('Open Event Id not found: '+originalEventId);
+                return;
+            } else if(openEvent instanceof DelegationBotEvent) {                
+                commsEvent = (openEvent as DelegationBotEvent).commsEvent;
+            } else if (openEvent instanceof CommsEvent) {
+                commsEvent = openEvent;
+            }
+            if(!commsEvent) {
+                res.status(400).send('Comms Event not found: '+originalEventId);
+                return;
+            }
+
+
+            if (targetInstance && targetInstance.enabled) {                
+                const event:DelegationBotEvent = new DelegationBotEvent(
+                    {
+                        id:generateEventId(),
+                        project:taskData.project,
+                        task_description: taskData.task_description,
+                        notes: taskData.notes??'',
+                        data: taskData.data??null,
+                        delegator_botid: delegatorId,
+                        assignedTo: targetInstanceId,
+                        commsEvent:commsEvent
+                    }
+                );                
+                this.handleBotFlow(targetInstance, event);
+                res.status(200).json({ message: 'Task delegated' });
+            } else {
                 res.status(404).send('Target bot not found or is disabled');
             }
         });

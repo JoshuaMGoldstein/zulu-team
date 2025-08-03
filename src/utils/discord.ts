@@ -3,25 +3,34 @@ import { log } from './log';
 
 const MAX_MESSAGE_LENGTH = 2000;
 
-export const sendChunkedMessage = async (statusMessage: Message, content: string) => {
+
+export const sendChunkedMessage = async (statusMessage: Message, content: string, contenttype?:string) => {
     if (!content || content.trim() === '') return;
 
     try {
         const channel = statusMessage.channel as TextChannel;
-        if (content.length <= MAX_MESSAGE_LENGTH) {
+
+        
+        let CONTENTTYPE_LENGTH = 0;
+        let contenttype_prefix = contenttype ? ('```'+contenttype+'\n' ) :'';
+        let contenttype_postfix = contenttype ? '```' : '';
+        if( contenttype) { 
+          CONTENTTYPE_LENGTH = (contenttype_prefix+contenttype_postfix).length;
+        }
+        if(statusMessage.content.trim().endsWith('...') && !contenttype && content.length <= MAX_MESSAGE_LENGTH ) {             
             await statusMessage.edit(content);
             return;
         }
-
+        
+        let ADJUSTED_MAX_MESSAGE_LENGTH = MAX_MESSAGE_LENGTH-CONTENTTYPE_LENGTH;
+      
         const chunks = [];
-        for (let i = 0; i < content.length; i += MAX_MESSAGE_LENGTH) {
-            chunks.push(content.substring(i, i + MAX_MESSAGE_LENGTH));
+        for (let i = 0; i < content.length; i += ADJUSTED_MAX_MESSAGE_LENGTH) {
+            chunks.push(contenttype_prefix+content.substring(i, i + ADJUSTED_MAX_MESSAGE_LENGTH)+contenttype_postfix);
         }
 
-        await statusMessage.edit(chunks[0]);
-
         if (channel instanceof TextChannel) {
-            for (let i = 1; i < chunks.length; i++) {
+            for (let i = 0; i < chunks.length; i++) {
                 await channel.send(chunks[i]);
             }
         }

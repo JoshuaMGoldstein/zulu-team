@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/JoshuaMGoldstein/zulu-team#readme",
   "dependencies": {
+    "@google/genai": "^1.9.0",
     "@types/express": "^4.17.21",
     "@types/node": "^20.12.12",
     "body-parser": "^1.20.2",

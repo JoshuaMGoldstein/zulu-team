@@ -20,3 +20,7 @@ The management GUI on port 3000 allows you to:
 *   To start the development server with hot reloading, run: `npm run dev`
 *   To build the project, run: `npm run build`
 *   To start the server in production, run: `npm start`
+
+## Development Guidelines
+
+*   Avoid overusing the `:any` type in TypeScript. Prioritize strong typing to improve code quality and prevent errors, especially in larger projects.

@@ -5,11 +5,12 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { log } from './utils/log';
 import * as dotenv from 'dotenv';
-import { Bot, BotOutput, BotEvent, BotEventType } from './bots/types';
+import { Bot, BotOutput, BotEvent, BotEventType, BotSettings } from './bots/types';
 import { GeminiToolCall } from './bots/gemini';
 import { Message } from 'discord.js';
 import { sendChunkedMessage } from './utils/discord';
 import templateManager from './templatemanager';
+import configManager from './configmanager';
 
 dotenv.config();
 
@@ -28,14 +29,9 @@ export type StoredPromise = {
 };
 
 class DockerManager {
-    private instances: Bot[];
-    private instancesPath: string;
     private openPromises: Map<string, Map<string, StoredPromise>> = new Map();
 
     constructor() {
-        this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
-        this.instances = [];
-        this.loadInstances();
     }
 
     public getOpenEventByInstanceAndEventId(instanceId:string, eventId:string):BotEvent|undefined {
@@ -50,10 +46,6 @@ class DockerManager {
         } else {
             return undefined;
         }
-    }
-
-    private loadInstances() {
-        this.instances = JSON.parse(fs.readFileSync(this.instancesPath, 'utf-8'));
     }
 
     private async getRunningContainers(): Promise<Map<string, string>> {
@@ -72,13 +64,12 @@ class DockerManager {
     }
 
     public async initBots(instanceIds?: string[]) {
-        this.loadInstances();
         log('Initializing and verifying bot containers...');
         const runningContainers = await this.getRunningContainers();
 
         const instancesToInit = instanceIds
-            ? this.instances.filter(inst => instanceIds.includes(inst.id))
-            : this.instances;
+            ? configManager.getInstances().filter(inst => instanceIds.includes(inst.id))
+            : configManager.getInstances();
 
         for (const instance of instancesToInit) {
             if (instance.enabled) {
@@ -92,8 +83,7 @@ class DockerManager {
                         await this.stopAndRemoveContainer(containerName);
                         await this.startBotContainer(instance);
                     } else {
-                        log(`Container ${containerName} is running the correct image.`);
-                    }
+                        log(`Container ${containerName} is running the correct image.`);                    }
                 } else {
                     log(`Container ${containerName} not found. Starting...`);
                     await this.startBotContainer(instance);
@@ -115,9 +105,10 @@ class DockerManager {
 
         let command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" --network=host ${envVars} ${imageName} sleep infinity`;
 
-        if (instance.role === 'project-manager' || instance.role === 'qa') {
+        const role = configManager.getRoles()[instance.role];
+        if (role && role.mountBotInstances) {
             const botInstancesPath = path.resolve(__dirname, '../bot-instances');
-            command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" -v "${botInstancesPath}:/workspace/bot-instances" --network=host ${envVars} ${imageName} sleep infinity`;
+            command = `docker run -d --name ${containerName} -v "${volumePath}:/workspace" -v "${botInstancesPath}:/workspace/bot-instances:ro" --network=host ${envVars} ${imageName} sleep infinity`;
         }
 
         try {
@@ -227,7 +218,7 @@ class DockerManager {
         const env: { [key: string]: string } = {
             EVENT_ID: event.id,
             INSTANCE_ID: instance.id,
-            API_URL: templateManager.getApiUrl()
+            API_URL: `http://localhost:3001`
         };
 
         log(`Activating bot ${instance.id} in container ${containerName}`);

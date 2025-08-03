@@ -1,5 +1,0 @@
-{
-    "hooks": {
-        "tool_code": "curl -X POST ${APIURL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCEID}' -H 'X-Event-Id: ${EVENTID}' -H 'Content-Type: application/json' --data-binary @-"
-    }
-}

@@ -2,22 +2,91 @@ import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ClaudeModels, GeminiModels } from './bots/types';
+import configManager from './configmanager';
 
 export const createGui = () => {
     const app = express();
     app.use(express.json());
     app.use(express.static(path.join(__dirname, '../public')));
-
+    
     const instancesPath = path.join(__dirname, '../bot-instances/instances.json');
     const projectsPath = path.join(__dirname, '../bot-instances/projects.json');
+    const settingsPath = path.join(__dirname, '../bot-instances/settings.json');
+    const rolesPath = path.join(__dirname, '../bot-instances/roles.json');
 
-    const readJsonFile = (filePath: string) => {
-        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    };
-
-    const writeJsonFile = (filePath: string, data: any[]) => {
+    const writeJsonFile = (filePath: string, data: any) => {
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
     };
+
+    // Reload endpoint
+    app.post('/api/reload-configs', (req, res) => {
+        configManager.load();
+        res.status(200).send();
+    });
+
+    // Settings routes
+    app.get('/api/settings', (req, res) => {
+        res.json(configManager.getSettings());
+    });
+
+    app.put('/api/settings', (req, res) => {
+        const newSettings = req.body;
+        writeJsonFile(settingsPath, newSettings);
+        res.json(newSettings);
+    });
+
+
+    // Template routes
+    app.get('/api/templates/:role', (req, res) => {
+        const role = req.params.role;
+        const templatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
+        if (fs.existsSync(templatePath)) {
+            res.sendFile(templatePath);
+        } else {
+            res.status(404).send('Template not found');
+        }
+    });
+
+    app.put('/api/templates/:role', (req, res) => {
+        const role = req.params.role;
+        const templatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
+        fs.writeFileSync(templatePath, req.body);
+        res.status(200).send();
+    });
+
+    // Role routes
+    app.get('/api/roles', (req, res) => {
+        res.json(configManager.getRoles());
+    });
+
+    app.post('/api/roles', (req, res) => {
+        const roles = configManager.getRoles();
+        const newRole = req.body;
+        roles[newRole.id] = {
+            name: newRole.name,
+            description: newRole.description,
+            dmVerbosity: -1,
+            channelVerbosity: -1,
+            delegatedVerbosity: -1,
+            mountBotInstances: false,
+            allowDelegation: false
+        };
+        writeJsonFile(rolesPath, roles);
+        res.status(201).json(newRole);
+    });
+
+    app.put('/api/roles/:id', (req, res) => {
+        const roles = configManager.getRoles();
+        const updatedRole = req.body;
+        if (roles[req.params.id]) {
+            roles[req.params.id] = updatedRole;
+            writeJsonFile(rolesPath, roles);
+            res.json(updatedRole);
+        } else {
+            res.status(404).send('Role not found');
+        }
+    });
+
 
     // Model routes
     app.get('/api/models', (req, res) => {
@@ -29,11 +98,11 @@ export const createGui = () => {
 
     // Bot routes
     app.get('/api/bots', (req, res) => {
-        res.json(readJsonFile(instancesPath));
+        res.json(configManager.getInstances());
     });
 
     app.post('/api/bots', (req, res) => {
-        const instances = readJsonFile(instancesPath);
+        const instances = configManager.getInstances();
         const newBotData = req.body;
 
         const newBot = {
@@ -49,7 +118,7 @@ export const createGui = () => {
     });
 
     app.put('/api/bots/:id', (req, res) => {
-        const instances = readJsonFile(instancesPath);
+        const instances = configManager.getInstances();
         const updatedBotData = req.body;
         const botIndex = instances.findIndex((bot: any) => bot.id === req.params.id);
 
@@ -70,11 +139,11 @@ export const createGui = () => {
 
     // Project routes
     app.get('/api/projects', (req, res) => {
-        res.json(readJsonFile(projectsPath));
+        res.json(configManager.getProjects());
     });
 
     app.post('/api/projects', (req, res) => {
-        const projects = readJsonFile(projectsPath);
+        const projects = configManager.getProjects();
         const newProjectData = req.body;
         const now = new Date().toISOString();
 
@@ -90,7 +159,7 @@ export const createGui = () => {
     });
 
     app.put('/api/projects/:id', (req, res) => {
-        const projects = readJsonFile(projectsPath);
+        const projects = configManager.getProjects();
         const updatedProjectData = req.body;
         const projectIndex = projects.findIndex((p: any) => p.id === req.params.id);
 

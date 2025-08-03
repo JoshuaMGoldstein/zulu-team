@@ -45,15 +45,7 @@ export function getGeminiToolCallOutputAndFormat(toolHook:GeminiToolCall):[strin
     if(!toolname || !toolargs || !toolResponse) return ['','',''];
     
     if(toolname && toolargs && typeof toolargs === 'object') {
-        switch(toolname) {
-            case 'replace':
-            case 'writefile':
-            default:
-            if(toolargs.content) toolargs.content='***';
-            if(toolargs.new_string) toolargs.new_string='***';
-            if(toolargs.old_string) toolargs.old_string='***';
-            break;
-        }        
+
 
         let toolOutput =
             (toolResponse.responseParts && typeof toolResponse.responseParts === 'object' && 'functionResponse' in toolResponse.responseParts)
@@ -72,6 +64,16 @@ export function getGeminiToolCallOutputAndFormat(toolHook:GeminiToolCall):[strin
         } else {
             output = JSON.stringify(toolResponse,null,2);
         }
+        switch(toolname) {
+            case 'replace':
+            case 'writefile':
+            default:
+                if(toolargs.content) toolargs.content='***';
+                if(toolargs.new_string) toolargs.new_string='***';
+                if(toolargs.old_string) toolargs.old_string='***';
+                break;
+        }        
+
         let toolmsg = `Using tool \`${toolname}\` \`${JSON.stringify(toolargs)}\``;
 
         return [toolmsg, output, outputFormat];

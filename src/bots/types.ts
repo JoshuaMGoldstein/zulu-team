@@ -57,7 +57,7 @@ export interface Bot {
     model: ClaudeModels | GeminiModels;
     discordBotToken: string;
     discordChannelId: string | string[];
-    settings: any;
+    settings: BotSettings;
     status:BotStatus;
     workingDirectory:string;
     lastActivity:string; //Datetime
@@ -72,9 +72,13 @@ export enum Verbosity {
 }
 
 export interface BotSettings {
+    name: string;
+    description: string;
     dmVerbosity:Verbosity
     channelVerbosity:Verbosity
     delegatedVerbosity:Verbosity
+    mountBotInstances: boolean;
+    allowDelegation: boolean;
 }
 
 enum BotEventSource {
@@ -113,9 +117,10 @@ export class CommsEvent extends BotEvent {
 }
 
 export class DiscordBotEvent extends CommsEvent {
-    constructor(e:{id:string, message:Message}) {
+    constructor(e:{id:string, message:Message, channelProjects: string[]}) {
         super(e.id, BotEventSource.DISCORD);                
-        this.message=e.message
+        this.message=e.message;
+        this.channelProjects = e.channelProjects;
     }
     public getSummary():string {
         return JSON.stringify({
@@ -123,11 +128,13 @@ export class DiscordBotEvent extends CommsEvent {
             timestamp:this.getDateISOString(),
             source:this.source,
             author: { id: this.message.author.id, name: this.message.author.displayName },            
-            content:this.message.content            
+            content:this.message.content,
+            channelProjects: this.channelProjects
         });
     }
     
     public message: Message;
+    public channelProjects: string[];
 }
 
 export class DelegationBotEvent extends BotEvent {
@@ -165,8 +172,10 @@ export class DelegationBotEvent extends BotEvent {
 export interface Project {
     id:string,
     name:string
+    description:string,
     repositoryUrl:string,
     assignedQa:string,
+    discordChannelIds: string[],
     createdAt:string, //Datetime string
     updatedAt:string //Datetime string
 }

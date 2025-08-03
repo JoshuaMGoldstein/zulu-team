@@ -1,7 +1,7 @@
 import { createServer } from './server';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project } from './bots/types';
+import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
 import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
 import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';
 import dockerManager from './dockermanager';
@@ -11,6 +11,7 @@ import { sendChunkedMessage } from './utils/discord';
 import { STDERR_FILTERS } from './utils/filters';
 import { generateEventId } from './utils/snowflake';
 import { parseCodeBlocks } from './utils/parsers';
+import configManager from './configmanager';
 
 import {BotEvent,DiscordBotEvent,DelegationBotEvent} from './bots/types';
 import dockermanager from './dockermanager';
@@ -20,35 +21,20 @@ const MAX_ATTEMPTS = 5;
 
 class ApiServer {
     private app: express.Application;
-    private instances: Bot[];
-    private projects: Project[];
-    private instancesPath: string;
-    private projectsPath: string;
     private discordClients: Map<string, Client> = new Map();
 
     constructor() {
         this.app = createServer();
         this.app.use(express.json());
-        this.instancesPath = path.join(__dirname, '../bot-instances/instances.json');
-        this.projectsPath = path.join(__dirname, '../bot-instances/projects.json');
-        this.instances = [];
-        this.projects = [];
-        this.loadConfigs();
         this.setupRoutes();
     }
 
-    private loadConfigs() {
-        this.instances = JSON.parse(fs.readFileSync(this.instancesPath, 'utf-8'));
-        this.projects = JSON.parse(fs.readFileSync(this.projectsPath, 'utf-8'));
-    }
-
     public initBots(instanceIds?: string[]) {
-        this.loadConfigs();
         dockerManager.initBots(instanceIds);
 
         const instancesToInit = instanceIds
-            ? this.instances.filter(inst => instanceIds.includes(inst.id))
-            : this.instances;
+            ? configManager.getInstances().filter(inst => instanceIds.includes(inst.id))
+            : configManager.getInstances();
 
         instancesToInit.forEach((instance: any) => {
             if (instance.enabled) {
@@ -74,6 +60,40 @@ class ApiServer {
         const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
         logStream.write(JSON.stringify(event) + '\n');
         logStream.end();
+    }
+
+    private getVerbosity(instance: Bot, event: BotEvent): Verbosity {
+        const isDelegated = event instanceof DelegationBotEvent;
+        const isDm = event instanceof DiscordBotEvent && event.message.channel.type === ChannelType.DM;
+
+        let verbosity: Verbosity;
+
+        if (isDelegated) {
+            verbosity = instance.settings?.delegatedVerbosity ?? Verbosity.INHERIT;
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getRoles()[instance.role]?.delegatedVerbosity ?? Verbosity.INHERIT;
+            }
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getSettings().delegatedVerbosity;
+            }
+        } else if (isDm) {
+            verbosity = instance.settings?.dmVerbosity ?? Verbosity.INHERIT;
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getRoles()[instance.role]?.dmVerbosity ?? Verbosity.INHERIT;
+            }
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getSettings().dmVerbosity;
+            }
+        } else {
+            verbosity = instance.settings?.channelVerbosity ?? Verbosity.INHERIT;
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getRoles()[instance.role]?.channelVerbosity ?? Verbosity.INHERIT;
+            }
+            if (verbosity === Verbosity.INHERIT) {
+                verbosity = configManager.getSettings().channelVerbosity;
+            }
+        }
+        return verbosity;
     }
 
     private async createStatusMessageIfApplicable(targetInstance:Bot, event:BotEvent):Promise<Message|undefined> {
@@ -125,6 +145,7 @@ class ApiServer {
         log(`Activating bot ${targetInstance.id} for event ${event.id}`);
 
         let statusMessage:Message|undefined = await this.createStatusMessageIfApplicable(targetInstance, event);    
+        const verbosity = this.getVerbosity(targetInstance, event);
 
         try {
             let botOutput = await dockerManager.activateBot(targetInstance, event, statusMessage);
@@ -140,13 +161,33 @@ class ApiServer {
                     fullResponse += botOutput.output;
 
                 } else if(botOutput.type == BotEventType.TOOLCALL) {
-                    if (statusMessage) {
+                    if (statusMessage && (verbosity & Verbosity.TOOLHOOKS)) {
                         //Fixme: Support Claude etc
                         let geminiToolCall = botOutput.output as GeminiToolCall;
                         let [toolMsg,toolOutput,toolOutputFormat] = getGeminiToolCallOutputAndFormat(geminiToolCall);
                         
-                        await sendChunkedMessage(statusMessage, toolMsg);
-                        await sendChunkedMessage(statusMessage, toolOutput, toolOutputFormat);
+                        if(toolMsg) {
+                            await sendChunkedMessage(statusMessage, toolMsg);
+                        }
+                        if(toolOutput) {
+                            //FIXME: Allow viewing of additional hidden lines through a button interface?
+                            let maxToolLines = 20;
+                            let maxToolChars=1000;
+                            if(toolOutput.length > maxToolChars ) {
+                                let splitOutput = toolOutput.split('\n');
+                                let lines=0;
+                                toolOutput='';
+                                for(lines=0; lines<splitOutput.length && lines<=maxToolLines; lines++) {                                    
+                                    let newToolOutput = toolOutput + splitOutput[lines]+"\n";
+                                    if( newToolOutput.length > maxToolChars) break;                                    
+                                    toolOutput =newToolOutput;
+                                }
+                                if(splitOutput.length > lines) {
+                                    toolOutput += `...${splitOutput.length-lines} more lines (hidden)`;
+                                }
+                            }
+                            await sendChunkedMessage(statusMessage, toolOutput, toolOutputFormat);
+                        }
                     }           
                 }
 
@@ -156,7 +197,7 @@ class ApiServer {
                 botOutput = await botOutput.next;
             }
 
-            if (statusMessage) {
+            if (statusMessage && (verbosity & Verbosity.STDOUT)) {
                 await sendChunkedMessage(statusMessage, fullResponse);
             }                    
     
@@ -189,9 +230,9 @@ class ApiServer {
             responseJson = { task_status: 'problem', message: 'Invalid JSON response', notes: response };
         }
 
-        const project = this.projects.find(p => p.name === originalEvent.project);                
-        const delegator = this.instances.find(i => i.id === originalEvent.delegator_botid);
-        const developer = this.instances.find(i => i.id === originalEvent.assignedTo);
+        const project = configManager.getProjects().find(p => p.name === originalEvent.project);                
+        const delegator = configManager.getInstances().find(i => i.id === originalEvent.delegator_botid);
+        const developer = configManager.getInstances().find(i => i.id === originalEvent.assignedTo);
 
     
         
@@ -224,7 +265,7 @@ class ApiServer {
             return;
         } else if (fromInstance.role === 'developer' && (responseJson.task_status === 'complete' || responseJson.task_status === 'progress')) { 
             // 2. Handle QA flow
-            const qaBot = this.instances.find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
+            const qaBot = configManager.getInstances().find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
             if (qaBot) {
                 log(`Developer task complete for ${project.name}. Delegating to QA bot ${qaBot.id}.`);                                
                 this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);
@@ -232,7 +273,7 @@ class ApiServer {
             }
         } else if (fromInstance.role === 'qa' && responseJson.task_status === 'failed') { 
             // 3. Handle QA failure (and max attempts)
-            const developer = this.instances.find(i => i.id === originalEvent.assignedTo);
+            const developer = configManager.getInstances().find(i => i.id === originalEvent.assignedTo);
             if (developer && nextEvent.attempts < MAX_ATTEMPTS) {
                 log(`QA failed for ${project.name}. Sending back to developer ${developer.id}.`);
                                 
@@ -274,7 +315,9 @@ class ApiServer {
                 const eventId = generateEventId();
                 log(`Discord Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
                 
-                const discordBotEvent = new DiscordBotEvent({id: generateEventId(),message:message});
+                const channelProjects = configManager.getProjects().filter(p => Array.isArray(p.discordChannelIds) && p.discordChannelIds.includes(message.channel.id)).map(p => p.name);
+
+                const discordBotEvent = new DiscordBotEvent({id: generateEventId(),message:message, channelProjects});
                 
                 this.handleBotFlow(instance, discordBotEvent);
             }
@@ -286,8 +329,7 @@ class ApiServer {
 
     private setupRoutes() {
         this.app.get('/bots', (req, res) => {
-            this.loadConfigs();
-            const bots: Bot[] = this.instances.map((instance: any) => {
+            const bots: Bot[] = configManager.getInstances().map((instance: any) => {
                 const settingsPath = path.join(__dirname, `../bot-instances/${instance.id}/.${instance.cli}/settings.json`);
                 const mdPath = path.join(__dirname, `../bot-instances/${instance.id}/${instance.cli.toUpperCase()}.md`);
 
@@ -333,14 +375,17 @@ class ApiServer {
         });
 
         this.app.post('/instance/:instanceId/delegated-task', (req, res) => {
-            this.loadConfigs();
             const targetInstanceId = req.params.instanceId;
             const taskData = req.body;
             const delegatorId = req.header('X-Instance-Id');
             const originalEventId = req.header('X-Event-Id');            
 
+            const delegator = configManager.getInstances().find((inst: any) => inst.id === delegatorId);
+            if (!delegator || !configManager.getRoles()[delegator.role]?.allowDelegation) {
+                return res.status(403).send('This bot is not authorized to delegate tasks.');
+            }
 
-            const targetInstance = this.instances.find((inst: any) => inst.id === targetInstanceId);
+            const targetInstance = configManager.getInstances().find((inst: any) => inst.id === targetInstanceId);
 
             if(!originalEventId) {res.status(404).send('No X-Event-Id Header provided'); return; }
             if(!delegatorId) { res.status(404).send('No X-Instance-Id Header provided'); return; }

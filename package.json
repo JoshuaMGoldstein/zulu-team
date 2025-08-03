@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "ts-node src/index.ts",
-    "dev": "nodemon --watch src --ext ts --exec \"ts-node src/index.ts\"",
+    "dev": "nodemon --legacy-watch --watch ./src --ext ts --exec \"ts-node src/index.ts\"",
     "build": "tsc"
   },
   "repository": {

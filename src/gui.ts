@@ -13,6 +13,7 @@ export const createGui = () => {
     const projectsPath = path.join(__dirname, '../bot-instances/projects.json');
     const settingsPath = path.join(__dirname, '../bot-instances/settings.json');
     const rolesPath = path.join(__dirname, '../bot-instances/roles.json');
+    const gitKeysPath = path.join(__dirname, '../bot-instances/gitkeys.json');
 
     const writeJsonFile = (filePath: string, data: any) => {
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
@@ -176,6 +177,26 @@ export const createGui = () => {
         } else {
             res.status(404).send('Project not found');
         }
+    });
+
+    // Git Key routes
+    app.get('/api/gitkeys', (req, res) => {
+        res.json(JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8')));
+    });
+
+    app.post('/api/gitkeys', (req, res) => {
+        const keys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
+        const newKey = req.body;
+        keys.push(newKey);
+        writeJsonFile(gitKeysPath, keys);
+        res.status(201).json(newKey);
+    });
+
+    app.delete('/api/gitkeys/:id', (req, res) => {
+        let keys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
+        keys = keys.filter((key: any) => key.id !== req.params.id);
+        writeJsonFile(gitKeysPath, keys);
+        res.status(204).send();
     });
 
     return app;

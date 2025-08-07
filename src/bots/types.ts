@@ -176,6 +176,7 @@ export interface Project {
     repositoryUrl:string,
     assignedQa:string,
     discordChannelIds: string[],
+    gitKeyId?: string,
     createdAt:string, //Datetime string
     updatedAt:string //Datetime string
 }

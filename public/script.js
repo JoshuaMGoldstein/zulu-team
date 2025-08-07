@@ -42,6 +42,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const settingsEditorModal = new bootstrap.Modal(settingsEditorModalElement);
     const settingsForm = document.getElementById('settings-form');
 
+    // Secrets-related elements
+    const editSecretsButton = document.getElementById('edit-secrets-button');
+    const secretsEditorModalElement = document.getElementById('secrets-editor-modal');
+    const secretsEditorModal = new bootstrap.Modal(secretsEditorModalElement);
+    const gitKeyForm = document.getElementById('git-key-form');
+    const gitKeyList = document.getElementById('git-key-list');
+
     // Template-related elements
     const templateEditorModalElement = document.getElementById('template-editor-modal');
     const templateEditorModal = new bootstrap.Modal(templateEditorModalElement);
@@ -73,6 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         description: document.getElementById('project-description'),
         repositoryUrl: document.getElementById('project-repositoryUrl'),
         discordChannelIds: document.getElementById('project-discordChannelIds'),
+        gitKeyId: document.getElementById('project-gitKeyId'),
     });
 
     const getRoleFormElements = () => ({
@@ -90,6 +98,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         dmVerbosity: document.getElementById('dmVerbosity'),
         channelVerbosity: document.getElementById('channelVerbosity'),
         delegatedVerbosity: document.getElementById('delegatedVerbosity'),
+    });
+
+    const getGitKeyFormElements = () => ({
+        id: document.getElementById('git-key-id'),
+        name: document.getElementById('git-key-name'),
+        privateKey: document.getElementById('git-key-privateKey'),
     });
 
     const verbosityOptions = [
@@ -193,6 +207,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         populateVerbosityDropdown(elements.delegatedVerbosity, settings.delegatedVerbosity, false);
     };
 
+    const fetchGitKeys = async () => {
+        const response = await fetch('/api/gitkeys');
+        const keys = await response.json();
+        gitKeyList.innerHTML = '';
+        keys.forEach(key => {
+            const keyElement = document.createElement('div');
+            keyElement.className = 'list-group-item d-flex justify-content-between align-items-center';
+            keyElement.innerHTML = `
+                <span>${key.name} <small class="text-muted">(${key.id})</small></span>
+                <button class="btn btn-sm btn-outline-danger delete-git-key" data-id="${key.id}">Delete</button>
+            `;
+            gitKeyList.appendChild(keyElement);
+        });
+    };
+
     // Bot event listeners
     addBotButton.addEventListener('click', () => {
         botModalLabel.textContent = 'Add New Bot';
@@ -291,6 +320,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         projectEditorModal.show();
     });
 
+    const populateGitKeyDropdown = async (selectedKeyId) => {
+        const response = await fetch('/api/gitkeys');
+        const keys = await response.json();
+        const selectElement = document.getElementById('project-gitKeyId');
+        selectElement.innerHTML = '<option value="">None</option>';
+        keys.forEach(key => {
+            const option = document.createElement('option');
+            option.value = key.id;
+            option.textContent = key.name;
+            if (key.id === selectedKeyId) {
+                option.selected = true;
+            }
+            selectElement.appendChild(option);
+        });
+    };
+
     projectList.addEventListener('click', async (event) => {
         if (event.target.classList.contains('edit-project')) {
             const projectId = event.target.dataset.id;
@@ -306,6 +351,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 elements.description.value = project.description;
                 elements.repositoryUrl.value = project.repositoryUrl;
                 elements.discordChannelIds.value = project.discordChannelIds.join(', ');
+                populateGitKeyDropdown(project.gitKeyId);
                 projectIdInput.disabled = true;
                 projectEditorModal.show();
             }
@@ -324,6 +370,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             description: elements.description.value,
             repositoryUrl: elements.repositoryUrl.value,
             discordChannelIds: elements.discordChannelIds.value.split(',').map(s => s.trim()).filter(s => s),
+            gitKeyId: elements.gitKeyId.value,
         };
 
         const url = isNewProject ? '/api/projects' : `/api/projects/${id}`;
@@ -432,6 +479,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         settingsEditorModal.hide();
+    });
+
+    // Secrets event listeners
+    editSecretsButton.addEventListener('click', () => {
+        fetchGitKeys();
+        secretsEditorModal.show();
+    });
+
+    gitKeyForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const elements = getGitKeyFormElements();
+        const keyData = {
+            id: elements.id.value,
+            name: elements.name.value,
+            privateKey: elements.privateKey.value,
+        };
+
+        await fetch('/api/gitkeys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(keyData),
+        });
+
+        gitKeyForm.reset();
+        fetchGitKeys();
+    });
+
+    gitKeyList.addEventListener('click', async (event) => {
+        if (event.target.classList.contains('delete-git-key')) {
+            const keyId = event.target.dataset.id;
+            if (confirm('Are you sure you want to delete this key?')) {
+                await fetch(`/api/gitkeys/${keyId}`, {
+                    method: 'DELETE',
+                });
+                fetchGitKeys();
+            }
+        }
     });
 
     // Template event listeners

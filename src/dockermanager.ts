@@ -5,7 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { log } from './utils/log';
 import * as dotenv from 'dotenv';
-import { Bot, BotOutput, BotEvent, BotEventType, BotSettings } from './bots/types';
+import { Bot, BotOutput, BotEvent, BotEventType, BotSettings, Project, DelegationBotEvent, DiscordBotEvent } from './bots/types';
 import { GeminiToolCall } from './bots/gemini';
 import { Message } from 'discord.js';
 import { sendChunkedMessage } from './utils/discord';
@@ -83,7 +83,8 @@ class DockerManager {
                         await this.stopAndRemoveContainer(containerName);
                         await this.startBotContainer(instance);
                     } else {
-                        log(`Container ${containerName} is running the correct image.`);                    }
+                        log(`Container ${containerName} is running the correct image.`);
+                    }
                 } else {
                     log(`Container ${containerName} not found. Starting...`);
                     await this.startBotContainer(instance);
@@ -202,8 +203,69 @@ class DockerManager {
         });
     }
 
-    public activateBot(instance: Bot, event:BotEvent, statusMessage?: Message): Promise<BotOutput> {
-        //const eventTimestamp = event.getDate()
+    public async cloneProject(instance: Bot, project: Project) {
+        const containerName = `zulu-instance-${instance.id}`;
+        const projectPath = `/workspace/${project.name}`;
+        const gitCheckCommand = `docker exec ${containerName} [ -d "${projectPath}/.git" ]`;
+
+        try {
+            await execAsync(gitCheckCommand);
+            log(`Project ${project.name} already exists for instance ${instance.id}.`);
+            return; // .git directory exists, so we skip cloning
+        } catch (error) {
+            // .git directory does not exist, proceed with cloning
+            log(`Cloning project ${project.name} for instance ${instance.id}`);
+        }
+
+        const gitKeys = configManager.getGitKeys();
+        const key = gitKeys.find((k: any) => k.id === project.gitKeyId);
+        if (!key) {
+            log(`Git key not found for project ${project.name}`);
+            return;
+        }
+
+        const keyPath = `~/.ssh/${key.id}`;
+        
+        const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no`;
+        const repoUrl = project.repositoryUrl.replace('https://github.com/', 'git@github.com:');
+
+        // Using a heredoc for the shell script to be executed in the container
+        const cloneScript = `
+mkdir -p ~/.ssh &&
+set -e &&
+echo "${key.privateKey}" > ${keyPath} &&
+chmod 600 ${keyPath} &&
+GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
+`;
+
+        const command = `docker exec -i ${containerName} bash -c "${cloneScript.replace(/"/g, '\"')}"`;
+
+        try {
+            await execAsync(command);
+            log(`Project ${project.name} cloned successfully into ${containerName}:${projectPath}.`);
+        } catch (error) {
+            log(`Error cloning project ${project.name} into ${containerName}:`, error);
+        }
+    }
+
+    public async activateBot(instance: Bot, event:BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        if (event instanceof DelegationBotEvent) {
+            const project = configManager.getProjects().find(p => p.name === event.project);
+            if (project) {
+                await this.cloneProject(instance, project);
+            }
+        } else if(event instanceof DiscordBotEvent ) {
+            let commsEvent = (event as DiscordBotEvent);
+            for(let p=0; p<commsEvent.channelProjects.length; p++) {
+                const projectName = commsEvent.channelProjects[p];
+                const project = configManager.getProjects().find(p => p.name === projectName);
+                if (project) {
+                    await this.cloneProject(instance, project);
+                }
+
+            }
+        }
+
         let messageContent = JSON.stringify(event.getSummary());
         
         const containerName = `zulu-instance-${instance.id}`;
@@ -258,13 +320,15 @@ class DockerManager {
                 });
             });
 
-            child.stderr?.once('data', (data: Buffer) => {
+            //STDERR is producing useless log data
+            /*child.stderr?.once('data', (data: Buffer) => {
+                
                 resolve({
                     type: BotEventType.STDERR,
                     output: data.toString(),
                     next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
                 });
-            });
+            });*/
 
             child.once('close', (code: number) => {
                 this.openPromises.get(instance.id)?.delete(event.id);

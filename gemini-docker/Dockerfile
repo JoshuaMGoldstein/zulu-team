@@ -20,9 +20,15 @@ RUN node -v
 RUN npm -v
 
 # Create a non-root user and directories for them, still as root
-RUN groupadd -r gemini-user && useradd -r -g gemini-user -m -s /bin/bash gemini-user
+RUN groupadd -r gemini-user && useradd -u 1000 -G sudo -r -g gemini-user -m -s /bin/bash gemini-user
 RUN mkdir -p /home/gemini-user/.npm-global && chown -R gemini-user:gemini-user /home/gemini-user/.npm-global
+
 RUN mkdir -p /workspace && chown -R gemini-user:gemini-user /workspace
+VOLUME /workspace
+
+#Run entrypoint.sh (which sets CHMOD on /workspace for gemini-user)
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Switch to the non-root user
 USER gemini-user
@@ -43,5 +49,9 @@ RUN git clone https://github.com/JoshuaMGoldstein/gemini-cli-hooks /home/gemini-
     npm run build && \
     npm install -g .
 
-# Keep the container running indefinitely
+
+
+
+#Run entrypoint, which will chown -R gemini-user:gemini-user /workspace && sleep infinity
+#ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["sleep", "infinity"]

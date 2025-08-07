@@ -1,5 +1,13 @@
 {
     "hooks": {
         "tool_code": "curl -X POST ${API_URL}/hook/post-tool-use -H 'X-Instance-Id: ${INSTANCE_ID}' -H 'X-Event-Id: ${EVENT_ID}' -H 'Content-Type: application/json' --data-binary @-"
+    },
+    "autosave": {
+        "truncateby": 20000,
+        "truncateafter": 26000,
+        "truncatenewtag": false,
+        "minstartingtokens": 6000,
+        "additionalcompressed": 13000,
+        "compressioncharlimit": 560
     }
 }

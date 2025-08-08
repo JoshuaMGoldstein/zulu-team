@@ -248,59 +248,50 @@ GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
         }
     }
 
-    public async activateBot(instance: Bot, event:BotEvent, statusMessage?: Message): Promise<BotOutput> {
+    private activationQueue: Map<string, Promise<BotOutput>> = new Map();
+
+    private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        // Existing activation logic (cloning and container exec)
         if (event instanceof DelegationBotEvent) {
             const project = configManager.getProjects().find(p => p.name === event.project);
             if (project) {
                 await this.cloneProject(instance, project);
             }
-        } else if(event instanceof DiscordBotEvent ) {
-            let commsEvent = (event as DiscordBotEvent);
-            for(let p=0; p<commsEvent.channelProjects.length; p++) {
+        } else if (event instanceof DiscordBotEvent) {
+            const commsEvent = event as DiscordBotEvent;
+            for (let p = 0; p < commsEvent.channelProjects.length; p++) {
                 const projectName = commsEvent.channelProjects[p];
                 const project = configManager.getProjects().find(p => p.name === projectName);
                 if (project) {
                     await this.cloneProject(instance, project);
                 }
-
             }
         }
 
-        let messageContent = JSON.stringify(event.getSummary());
-        
+        const messageContent = JSON.stringify(event.getSummary());
         const containerName = `zulu-instance-${instance.id}`;
         let cliCommand: string;
-
         if (instance.cli === 'gemini') {
             cliCommand = 'cd /workspace && gemini --autosave --resume --yolo';
         } else {
             cliCommand = `cd /workspace && claude --dangerously-skip-permissions --continue --model ${instance.model}`;
         }
-
         const env: { [key: string]: string } = {
             EVENT_ID: event.id,
             INSTANCE_ID: instance.id,
             API_URL: `http://localhost:3001`
         };
-
         log(`Activating bot ${instance.id} in container ${containerName}`);
-
         const spawnArgs = ['exec', '-i'];
         for (const key in env) {
             spawnArgs.push('-e', `${key}=${env[key]}`);
         }
         spawnArgs.push(containerName, 'bash', '-c', cliCommand);
-
-        const child = spawn('docker', spawnArgs, {
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        
+        const child = spawn('docker', spawnArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
         if (messageContent) {
             child.stdin.write(messageContent);
             child.stdin.end();
         }
-
         return new Promise((resolve, reject) => {
             if (!this.openPromises.has(instance.id)) {
                 this.openPromises.set(instance.id, new Map());
@@ -311,7 +302,6 @@ GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                 eventInfo: event,
                 child: child
             });
-
             child.stdout?.once('data', (data: Buffer) => {
                 resolve({
                     type: BotEventType.STDOUT,
@@ -319,17 +309,13 @@ GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                     next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
                 });
             });
-
-            //STDERR is producing useless log data
-            /*child.stderr?.once('data', (data: Buffer) => {
-                
-                resolve({
-                    type: BotEventType.STDERR,
-                    output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
-                });
-            });*/
-
+            // child.stderr?.once('data', (data: Buffer) => {
+            //     resolve({
+            //         type: BotEventType.STDERR,
+            //         output: data.toString(),
+            //         next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
+            //     });
+            // });
             child.once('close', (code: number) => {
                 this.openPromises.get(instance.id)?.delete(event.id);
                 resolve({
@@ -337,12 +323,25 @@ GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                     output: `Process exited with code ${code}`,
                 });
             });
-
             child.once('error', (err: Error) => {
                 this.openPromises.get(instance.id)?.delete(event.id);
                 reject(err);
             });
         });
+    }
+
+    public async activateBot(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        // Queue handling: ensure only one activation per bot at a time
+        const previous = this.activationQueue.get(instance.id) || Promise.resolve();
+        const queued = previous.then(() => this._runActivation(instance, event, statusMessage));
+        // Clean up the queue entry after this activation finishes
+        queued.finally(() => {
+            if (this.activationQueue.get(instance.id) === queued) {
+                this.activationQueue.delete(instance.id);
+            }
+        });
+        this.activationQueue.set(instance.id, queued);
+        return queued;
     }
 }
 

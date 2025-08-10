@@ -1,0 +1,1 @@
+export const getApiUrl = (): string => 'http://localhost:3001';

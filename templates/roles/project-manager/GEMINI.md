@@ -17,7 +17,8 @@
 ```bash
 curl -X POST ${API_URL}/instance/developer-id/delegated-task \
   -H 'X-Instance-Id: ${INSTANCE_ID}' \
-  -H 'X-Event-Id: {EVENT_ID}' \
+  -H 'X-Event-Id: ${EVENT_ID}' \
+  -H 'Content-Type: application/json' \
   -d '{
     "project": "",
     "task_description": "",

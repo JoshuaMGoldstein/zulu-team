@@ -12,20 +12,21 @@
 
 5.
 
-- Delegate a task: 
-```bash 
-curl -X POST ${API_URL}/instance/developer-id/delegated-task\
--H 'X-Instance-Id: ${INSTANCE_ID}'\
--H 'X-Event-Id: {EVENT_ID}'\
--d '\
-{\
-"project": "",\
-"task_description": "",\
-"notes": ""\
-"data": {},\
-"priority": "high",\
-"discordChannelId": "${DISCORD_CHANNEL_ID}",\
-"statusMessageId": "${STATUS_MESSAGE_ID}"\
+- When delegating a task, the project manager must determine the appropriate Git branch for the work. The branch name should be derived from the task description (e.g., convert the description to kebab‑case) and stored in a tracking file under the project’s status workspace (e.g., `/workspace/{project}-status/branches.json`). The project manager includes this branch in the delegation payload so the developer works on the correct branch.
+- Delegate a task (including required branch):
+```bash
+curl -X POST ${API_URL}/instance/developer-id/delegated-task \
+  -H 'X-Instance-Id: ${INSTANCE_ID}' \
+  -H 'X-Event-Id: {EVENT_ID}' \
+  -d '{
+    "project": "",
+    "task_description": "",
+    "branch": "",
+    "notes": "",
+    "data": {},
+    "priority": "high",
+    "discordChannelId": "${DISCORD_CHANNEL_ID}",
+    "statusMessageId": "${STATUS_MESSAGE_ID}"
 }'
 ```
 

@@ -56,9 +56,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const templateContentInput = document.getElementById('template-content');
     const templateRoleIdInput = document.getElementById('template-role-id');
 
-    // Fetch models
-    const response = await fetch('/api/models');
-    const models = await response.json();
+    // Fetch models and presets
+    const [modelsRes, presetsRes] = await Promise.all([
+        fetch('/api/models'),
+        fetch('/api/presets')
+    ]);
+    const models = await modelsRes.json();
+    const presets = await presetsRes.json();
 
     const getBotFormElements = () => ({
         id: document.getElementById('bot-id'),
@@ -67,6 +71,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         cli: document.getElementById('bot-cli'),
         enabled: document.getElementById('bot-enabled'),
         model: document.getElementById('bot-model'),
+        preset: document.getElementById('bot-preset'),
         discordBotToken: document.getElementById('bot-discordBotToken'),
         discordChannelId: document.getElementById('bot-discordChannelId'),
         status: document.getElementById('bot-status'),
@@ -127,17 +132,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     };
 
-    const populateModelDropdown = (cli, selectedModel) => {
-        const modelList = models[cli];
-        botModelSelect.innerHTML = '';
-        modelList.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model;
-            option.textContent = model;
-            if (model === selectedModel) {
-                option.selected = true;
-            }
-            botModelSelect.appendChild(option);
+    const populateModelDropdown = (selectedModel) => {
+        const modelSelect = document.getElementById('bot-model');
+        modelSelect.innerHTML = '<option value="auto">auto (kimi-k2-turbo-preview)</option>';
+        models.toolmodels.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = `${m.name} (${m.provider})`;
+            if (m.id === selectedModel) opt.selected = true;
+            modelSelect.appendChild(opt);
+        });
+    };
+
+    const populatePresetDropdown = (selectedPreset) => {
+        const presetSelect = document.getElementById('bot-preset');
+        presetSelect.innerHTML = '<option value="auto">auto</option>';
+        presets.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p;
+            if (p === selectedPreset) opt.selected = true;
+            presetSelect.appendChild(opt);
         });
     };
 
@@ -235,11 +250,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     botCliSelect.addEventListener('change', () => {
-        const selectedCli = botCliSelect.value;
-        populateModelDropdown(selectedCli);
-        if (selectedCli === 'gemini') {
-            botModelSelect.value = models.gemini.find(m => m.includes('pro'));
-        }
+        // CLI change no longer affects model list
     });
 
     botList.addEventListener('click', async (event) => {
@@ -267,7 +278,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         element.textContent = value || 'N/A';
                     }
                 }
-                populateModelDropdown(bot.cli, bot.model);
+                populateModelDropdown(bot.model);
+                populatePresetDropdown(bot.preset);
                 botIdInput.disabled = true;
                 botModal.show();
             }

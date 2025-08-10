@@ -69,7 +69,15 @@
                         </div>
                         <div class="mb-3">
                             <label for="bot-model" class="form-label">Model</label>
-                            <select class="form-select" id="bot-model" required></select>
+                            <select class="form-select" id="bot-model" required>
+                                <option value="auto">auto (kimi-k2-turbo-preview)</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="bot-preset" class="form-label">Preset</label>
+                            <select class="form-select" id="bot-preset" required>
+                                <option value="auto">auto</option>
+                            </select>
                         </div>
                         <div class="mb-3">
                             <label for="bot-managedProjects" class="form-label">Managed Projects (comma-separated)</label>

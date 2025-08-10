@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Use Ubuntu 22.04 as the base image
 FROM ubuntu:22.04
 
@@ -6,10 +8,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install necessary dependencies as root
 RUN apt-get update && apt-get install -y \
+    git \
     curl \
     git \
     unzip \
     && rm -rf /var/lib/apt/lists/*
+
+
 
 # Setup Node.js 22.x LTS as root
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -41,13 +46,21 @@ ENV PATH="/home/gemini-user/.npm-global/bin:${PATH}"
 # Disable git credential helper which can cause issues in non-interactive environments
 RUN git config --global credential.helper ''
 
-# Install Gemini-CLI from source to correctly handle build dependencies (like esbuild)
-# and then install the hooks package. This is all done as the gemini-user.
-RUN git clone https://github.com/JoshuaMGoldstein/gemini-cli-hooks /home/gemini-user/gemini-cli && \
-    cd /home/gemini-user/gemini-cli && \
-    npm install && \
-    npm run build && \
-    npm install -g .
+RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+
+# Install Gemini-CLI from oruvate repo and then set ownership to gemini-user to install it. This is done as root so it can access /run/secrets
+USER root
+
+RUN --mount=type=secret,id=github_token \
+    git clone "https://$(cat /run/secrets/github_token)@github.com/JoshuaMGoldstein/gemini-cli.git" \
+    /home/gemini-user/gemini-cli && \
+    chown -R gemini-user:gemini-user /home/gemini-user/gemini-cli
+
+USER gemini-user
+
+RUN cd /home/gemini-user/gemini-cli && \
+    npm install && npm run build && npm install -g .
 
 
 

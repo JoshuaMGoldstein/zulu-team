@@ -1,10 +1,12 @@
 import { createGui } from './gui';
 import apiServer from './apiserver';
 import { log } from './utils/log';
+import { updateModelsFile } from './models';
 
 const main = async () => {
     const guiServer = createGui();
 
+    await updateModelsFile();
     apiServer.initBots();
 
     guiServer.listen(3000, () => {

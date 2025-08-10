@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { log } from './utils/log';
+import { getApiUrl } from './utils/api';
 
 class TemplateManager {
     private templatesPath: string;
@@ -67,7 +68,7 @@ class TemplateManager {
     private replaceMacros(content: string, instance: any): string {
         return content
             .replace(/\${INSTANCE_ID}/g, instance.id)
-            .replace(/\${API_URL}/g, 'http://host.docker.internal:3001')
+            .replace(/\${API_URL}/g, getApiUrl())
             .replace(/\${CLI}/g, instance.cli.toUpperCase());
     }
 }

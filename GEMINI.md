@@ -24,3 +24,8 @@ The management GUI on port 3000 allows you to:
 ## Development Guidelines
 
 *   Avoid overusing the `:any` type in TypeScript. Prioritize strong typing to improve code quality and prevent errors, especially in larger projects.
+*   All TypeScript imports must be placed at the top of the file, before any other statements or declarations.
+*   After every set of changes, run `npm run build` to verify the code compiles without errors.
+
+## Important Notes
+*   Do not tell the user to edit files or run commands; perform the actions yourself using tool calls.

@@ -1,4 +1,7 @@
 import { createServer } from './server';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
 import * as fs from 'fs';
 import * as path from 'path';
 import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
@@ -390,8 +393,9 @@ class ApiServer {
             if(!originalEventId) {res.status(404).send('No X-Event-Id Header provided'); return; }
             if(!delegatorId) { res.status(404).send('No X-Instance-Id Header provided'); return; }
             if(!taskData.task_description || typeof(taskData.task_description) !== 'string' || 
-                !taskData.project || typeof(taskData.project) !== 'string') {
-                res.status(404).send('Bad task data provided'); return; 
+                !taskData.project || typeof(taskData.project) !== 'string' || 
+                !taskData.branch || typeof(taskData.branch) !== 'string') {
+                res.status(400).send('Bad task data provided: missing required fields'); return; 
             }
             
             //Find the comms Event specified by X-Event-ID
@@ -418,6 +422,7 @@ class ApiServer {
                         id:generateEventId(),
                         project:taskData.project,
                         task_description: taskData.task_description,
+                        branch: taskData.branch,
                         notes: taskData.notes??'',
                         data: taskData.data??null,
                         delegator_botid: delegatorId,

@@ -54,7 +54,8 @@ export interface Bot {
     role: BotRole;
     cli: BotCLI;
     enabled: boolean;
-    model: ClaudeModels | GeminiModels;
+    model: string; // "auto" or any model id
+    preset: string; // "auto" or preset name
     discordBotToken: string;
     discordChannelId: string | string[];
     settings: BotSettings;
@@ -138,7 +139,7 @@ export class DiscordBotEvent extends CommsEvent {
 }
 
 export class DelegationBotEvent extends BotEvent {
-    constructor(e:{id:string, project:string, task_description:string, notes:string, data:any, delegator_botid:string,assignedTo:string, commsEvent: BotEvent, attempts?: number}) {
+    constructor(e:{id:string, project:string, task_description:string, notes:string, data:any, delegator_botid:string,assignedTo:string, commsEvent: BotEvent, attempts?: number, branch?: string, changedFiles?: string[]}) {
         super(e.id, BotEventSource.DELEGATION);
         this.project=e.project;
         this.task_description=e.task_description;
@@ -147,7 +148,8 @@ export class DelegationBotEvent extends BotEvent {
         this.delegator_botid=e.delegator_botid;
         this.assignedTo=e.assignedTo;        
         this.commsEvent = e.commsEvent;
-                
+        this.branch = e.branch;
+        this.changedFiles = e.changedFiles;
         this.attempts=e.attempts??0;        
         this.final = false;
     }
@@ -164,7 +166,8 @@ export class DelegationBotEvent extends BotEvent {
     public assignedTo: string;
     public attempts: number;
     public final:boolean;
-
+    public branch?: string;
+    public changedFiles?: string[];
     //The original comms Event which caused the delegation chain
     public commsEvent:BotEvent;
 }

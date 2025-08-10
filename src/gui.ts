@@ -91,10 +91,22 @@ export const createGui = () => {
 
     // Model routes
     app.get('/api/models', (req, res) => {
-        res.json({
-            gemini: Object.values(GeminiModels),
-            claude: Object.values(ClaudeModels),
-        });
+        const modelsPath = path.join(__dirname, '../models.json');
+        if (fs.existsSync(modelsPath)) {
+            res.sendFile(modelsPath);
+        } else {
+            res.json({ toolmodels: [], flashmodels: [] });
+        }
+    });
+
+    // Preset routes
+    app.get('/api/presets', (req, res) => {
+        const presetsPath = path.join(__dirname, '../presets.json');
+        if (fs.existsSync(presetsPath)) {
+            res.sendFile(presetsPath);
+        } else {
+            res.json([]);
+        }
     });
 
     // Bot routes
@@ -108,6 +120,8 @@ export const createGui = () => {
 
         const newBot = {
             ...newBotData,
+            model: newBotData.model || 'auto',
+            preset: newBotData.preset || 'auto',
             status: 'idle',
             lastActivity: new Date().toISOString(),
             workingDirectory: `bot-instances/${newBotData.id}`
@@ -130,6 +144,8 @@ export const createGui = () => {
                 ...updatedBotData,
                 id: existingBot.id,
                 workingDirectory: existingBot.workingDirectory,
+                model: updatedBotData.model ?? existingBot.model,
+                preset: updatedBotData.preset ?? existingBot.preset,
             };
             writeJsonFile(instancesPath, instances);
             res.json(instances[botIndex]);

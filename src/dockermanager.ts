@@ -98,20 +98,7 @@ class DockerManager {
                 if (!fs.existsSync(sshDir)) {
                     fs.mkdirSync(sshDir, { recursive: true });
                 }
-                const keysPath = path.join(__dirname, '../bot-instances/gitkeys.json');
-                let privateKey = '';
-                if (fs.existsSync(keysPath)) {
-                    try {
-                        const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
-                        privateKey = keys.privateKey || '';
-                    } catch { /* ignore */ }
-                }
-                const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
-                const keyObj = keys.find((k: any) => k.id === 'id_ed25519');
-                if (keyObj && keyObj.privateKey) {
-                    const keyFile = path.join(sshDir, 'id_ed25519');
-                    fs.writeFileSync(keyFile, keyObj.privateKey, { mode: 0o600 });
-                }
+
                 const runningImage = runningContainers.get(containerName);
         // Check current platform env
         let currentPlatform = 'unknown';
@@ -302,18 +289,30 @@ class DockerManager {
             return;
         }
 
-        const keyPath = `~/.ssh/${key.id}`;
-        
+        // Decode base64 private key if encoded
+        let privateKeyContent = key.privateKey;
+        const sshDir = path.join(__dirname, `../bot-instances/${instance.id}/.ssh`);        
+        if (key.encoding === 'base64') {
+            console.log("Writing key to "+path.join(sshDir, key.id));
+            privateKeyContent = Buffer.from(key.privateKey, 'base64').toString('utf-8');
+            fs.writeFileSync(path.join(sshDir, key.id), privateKeyContent, { mode: 0o600 });
+        }
+                      
+//mkdir -p /workspace/.ssh
+//echo '${privateKeyContent.replace(/'/g, "'\"'\"'")}' > ${keyPath}
+//chmod 600 ${keyPath}
+
+
+        const keyPath = `/workspace/.ssh/${key.id}`;
         const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no`;
         const repoUrl = project.repositoryUrl.replace('https://github.com/', 'git@github.com:');
 
         // Using a heredoc for the shell script to be executed in the container
         const cloneScript = `
-set -e &&
-GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
+set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
 `;
 
-        const command = `docker exec -i ${containerName} bash -c "${cloneScript.replace(/"/g, '\"')}"`;
+        const command = `docker exec -i ${containerName} bash -c '${cloneScript.replace(/"/g, '\"')}'`;
         log(`Running clone command: ${command}`);
 
         try {

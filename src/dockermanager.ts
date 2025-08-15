@@ -340,7 +340,24 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                     try {
                         // Ensure project directory exists before checkout
                         await execAsync(`docker exec ${containerName} bash -c "test -d ${projectPath} || exit 1"`);
-                        await execAsync(`docker exec ${containerName} git -C ${projectPath} checkout ${event.branch}`);
+                        
+                        // Create branch if it doesn't exist, then checkout
+                        const branchScript = `
+set -e
+cd ${projectPath}
+# Try to fetch from origin, but don't fail if it fails
+git fetch origin 2>/dev/null || true
+if git show-ref --verify --quiet refs/heads/${event.branch}; then
+    git checkout ${event.branch}
+elif git ls-remote --heads origin ${event.branch} 2>/dev/null | grep -q ${event.branch}; then
+    # Branch exists on remote, create local tracking branch
+    git checkout -b ${event.branch} origin/${event.branch}
+else
+    # Branch doesn't exist locally or remotely, create new branch
+    git checkout -b ${event.branch}
+fi
+`;
+                        await execAsync(`docker exec ${containerName} bash -c "${branchScript}"`);
                         log(`Checked out branch ${event.branch} for project ${project.name}`);
                     } catch (err) {
                         log(`Failed to checkout branch ${event.branch} for project ${project.name}:`, err);

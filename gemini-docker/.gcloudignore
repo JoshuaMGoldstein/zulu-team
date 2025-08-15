@@ -1,0 +1,10 @@
+node_modules
+wrangler
+aws
+gcloudrun
+.git
+.env
+.dev.vars
+build.sh
+Dockerfile copy
+entrypoint.sh

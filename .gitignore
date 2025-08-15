@@ -144,3 +144,5 @@ bot-instances/
 
 # Environment variables
 *.env
+
+gcloud-key.json

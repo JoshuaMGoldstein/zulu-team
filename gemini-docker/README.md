@@ -5,6 +5,7 @@ This server provides a WebSocket-based protocol for executing commands as differ
 ## WebSocket Endpoint
 
 **URL:** `ws://localhost:8088/ws`
+**Cloud URL**: `wss://zulu-gemini-docker-364383558242.us-east4.run.app/ws`
 
 **Query Parameters:**
 - `clientid`: Unique client identifier

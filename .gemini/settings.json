@@ -3,8 +3,8 @@
         "tool_call": "curl -X POST http://localhost:3030/hook/tool_call -H 'X-Bot-Instance-Id: sys' -H 'X-Discord-Event-Id: ${HOOK_ID}' -H 'Content-Type: application/json' --data-binary @-"
     },
     "autosave": {
-        "truncateby": 15500,
-        "truncateafter": 22000,
+        "truncateby": 26500,
+        "truncateafter": 33000,
         "truncatenewtag": false,
         "minstartingtokens": 0,
         "additionalcompressed": 6000,

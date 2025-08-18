@@ -1,10 +1,12 @@
-node_modules
-wrangler
-aws
-gcloudrun
+node_modules/
+wrangler/
+aws/
+gcloudrun/
 .git
 .env
 .dev.vars
 build.sh
 Dockerfile copy
 entrypoint.sh
+test/
+cloudbuild.json

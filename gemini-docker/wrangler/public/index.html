@@ -111,23 +111,13 @@
         <h1>Terminal Client</h1>
         
         <div class="input-group">
-            <label for="execToken">EXEC_TOKEN (Required):</label>
-            <input type="password" id="execToken" placeholder="Enter your EXEC_TOKEN...">
-        </div>
-        
-        <div class="input-group">
-            <label for="apiKey">OPENAI_API_KEY (Optional):</label>
+            <label for="apiKey">OPENAI_API_KEY:</label>
             <input type="password" id="apiKey" placeholder="Enter your OpenAI API key...">
         </div>
         
         <div class="command-input">
             <label for="command">Command:</label>
             <input type="text" id="command" value="gemini --model 'kimi-k2-turbo-preview' --prompt '{message}'">
-        </div>
-        
-        <div class="message-input">
-            <label for="message">Message:</label>
-            <input type="text" id="message" placeholder="Enter your message..." onkeypress="handleKeyPress(event)">
         </div>
         
         <div class="terminal" id="terminal">
@@ -140,9 +130,9 @@
             <button id="postExecBtn" onclick="sendPostExec()" disabled>POST Exec</button>
         </div>
         
-        <div class="input-group">
-            <label for="stdin">STDIN:</label>
-            <input type="text" id="stdin" placeholder="Enter input for running process..." onkeypress="handleStdinKeyPress(event)">
+        <div class="message-input">
+            <label for="message">Message:</label>
+            <input type="text" id="message" placeholder="Enter your message..." onkeypress="handleKeyPress(event)">
         </div>
     </div>
 
@@ -150,7 +140,6 @@
         let ws = null;
         let clientId = '';
         let instanceId = '';
-        let activeProcesses = new Map(); // Track active processes for stdin
 
         function generateRandomId(length = 8) {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -167,39 +156,14 @@
 
         function addToTerminal(text, className = 'output') {
             const terminal = document.getElementById('terminal');
-            
-            // Find the last output element
-            const lastOutput = terminal.lastElementChild;
-            
-            // If the last element is of the same class and doesn't end with newline, append to it
-            if (lastOutput && lastOutput.className === className && !lastOutput.dataset.endsWithNewline) {
-                lastOutput.textContent += text;
-            } else {
-                // Create new element
-                const div = document.createElement('div');
-                div.className = className;
-                div.textContent = text;
-                terminal.appendChild(div);
-            }
-            
-            // Check if text ends with newline and mark accordingly
-            if (text.endsWith('\n')) {
-                const currentLast = terminal.lastElementChild;
-                if (currentLast) {
-                    currentLast.dataset.endsWithNewline = 'true';
-                }
-            }
-            
+            const div = document.createElement('div');
+            div.className = className;
+            div.textContent = text;
+            terminal.appendChild(div);
             terminal.scrollTop = terminal.scrollHeight;
         }
 
         function connectWebSocket() {
-            const execToken = document.getElementById('execToken').value;
-            if (!execToken) {
-                addToTerminal('Please enter EXEC_TOKEN', 'error');
-                return;
-            }
-
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.close();
             }
@@ -207,7 +171,7 @@
             clientId = generateRandomId();
             instanceId = generateRandomId();
             
-            const wsUrl = `/ws?clientid=${clientId}&instanceid=${instanceId}&token=${encodeURIComponent(execToken)}`;
+            const wsUrl = `/ws?clientid=${clientId}&instanceid=${instanceId}`;
             ws = new WebSocket(wsUrl);
 
             ws.onopen = function() {
@@ -226,10 +190,8 @@
                     addToTerminal(data.data, 'error');
                 } else if (data.type === 'stdclose') {
                     addToTerminal(`Process ${data.pid} closed: ${data.data}`, 'system');
-                    activeProcesses.delete(data.pid);
                 } else if (data.type === 'open') {
                     addToTerminal(`Process started with PID: ${data.pid}`, 'system');
-                    activeProcesses.set(data.pid, { clientId: clientId });
                 } else if (data.error) {
                     addToTerminal(`Error: ${data.error}`, 'error');
                 }
@@ -268,6 +230,11 @@
             }
 
             const apiKey = document.getElementById('apiKey').value;
+            if (!apiKey) {
+                addToTerminal('Please enter OPENAI_API_KEY', 'error');
+                return;
+            }
+
             const command = buildCommand();
             const message = {
                 type: "exec",
@@ -275,7 +242,7 @@
                 env: {
                     GEMINI_API_KEY: "nonsense",
                     OPENAI_BASE_URL: "https://api.moonshot.ai/v1",
-                    ...(apiKey && { OPENAI_API_KEY: apiKey })
+                    OPENAI_API_KEY: apiKey
                 }
             };
 
@@ -284,13 +251,12 @@
         }
 
         async function sendPostExec() {
-            const execToken = document.getElementById('execToken').value;
-            if (!execToken) {
-                addToTerminal('Please enter EXEC_TOKEN', 'error');
+            const apiKey = document.getElementById('apiKey').value;
+            if (!apiKey) {
+                addToTerminal('Please enter OPENAI_API_KEY', 'error');
                 return;
             }
 
-            const apiKey = document.getElementById('apiKey').value;
             const command = buildCommand();
             const message = {
                 clientid: clientId || generateRandomId(),
@@ -298,7 +264,7 @@
                 env: {
                     GEMINI_API_KEY: "nonsense",
                     OPENAI_BASE_URL: "https://api.moonshot.ai/v1",
-                    ...(apiKey && { OPENAI_API_KEY: apiKey })
+                    OPENAI_API_KEY: apiKey
                 }
             };
 
@@ -308,7 +274,6 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${execToken}`
                     },
                     body: JSON.stringify(message)
                 });
@@ -330,32 +295,6 @@
                     sendWsExec();
                 } else {
                     sendPostExec();
-                }
-            }
-        }
-
-        function handleStdinKeyPress(event) {
-            if (event.key === 'Enter') {
-                const stdinInput = document.getElementById('stdin');
-                const input = stdinInput.value;
-                if (!input || !ws || ws.readyState !== WebSocket.OPEN) {
-                    return;
-                }
-
-                // Find the last process PID (simplified - assumes last started process)
-                let lastPid = null;
-                activeProcesses.forEach((info, pid) => {
-                    lastPid = pid;
-                });
-
-                if (lastPid) {
-                    const message = {
-                        type: "stdin",
-                        data: input,
-                        pid: lastPid
-                    };
-                    ws.send(JSON.stringify(message));
-                    stdinInput.value = '';
                 }
             }
         }

@@ -1,0 +1,16 @@
+{
+  "name": "staticwebsite",
+  "version": "0.0.0",
+  "description": "Static Website With Express",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo \"no build step specified\" && exit 0",
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Bioniclogic Inc",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

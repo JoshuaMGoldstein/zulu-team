@@ -146,3 +146,4 @@ bot-instances/
 *.env
 
 gcloud-key.json
+.wrangler

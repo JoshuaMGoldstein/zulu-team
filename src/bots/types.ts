@@ -6,6 +6,16 @@ import { } from '../'
 import { Message } from "discord.js";
 import e from "express";
 
+export type ModelProvider = 'moonshot' | 'gemini' | 'openrouter' | 'claude'
+
+export interface Model {      
+  id: string,
+  name: string,
+  description: string,
+  provider: ModelProvider,
+  supported_parameters: string[]
+}
+
 export enum ClaudeModels {
     CLAUDE_SONNET_4 = "claude-sonnet-4-20250514",
     CLAUDE_OPUS_4 = "claude-opus-4-20250514",
@@ -63,6 +73,9 @@ export interface Bot {
     workingDirectory:string;
     lastActivity:string; //Datetime
     managedProjects:string | string[];
+
+    //Runtime settings (currently generated in dockermanager.ts, but maybe should be moved to templatemanager.ts)
+    files:Record<string,string>
 }
 
 export enum Verbosity {

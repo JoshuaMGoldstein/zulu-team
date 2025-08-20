@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Bot, Project, BotSettings } from './bots/types';
+import { Model,Bot, Project, BotSettings } from './bots/types';
+import {log} from './utils/log'
+import { env } from 'process';
+import { stringify } from 'querystring';
 
 class ConfigManager {
     private instances: Bot[];
@@ -11,6 +14,9 @@ class ConfigManager {
     private projectsPath: string;
     private settingsPath: string;
     private rolesPath: string;
+
+    private toolModels:Model[];
+    private flashModels:Model[];
 
     private gitKeysPath: string;
     private gitKeys: any[];
@@ -26,7 +32,55 @@ class ConfigManager {
         this.settings = {} as BotSettings;
         this.roles = {};
         this.gitKeys = [];
+
+        this.toolModels =[];
+        this.flashModels = [];
+
         this.load();
+    }
+
+    public getProviderForModel(model:string) {
+        let modelFlag = (model === 'auto')?'kimi-k2-turbo-preview':model;
+        let provider='moonshot'; //default
+        const found = this.toolModels.find((m: any) => m.id === model);
+        if (found) provider = found.provider;
+        return provider;
+    }
+    public generateEnvForInstance(instance:Bot):Record<string,string> {
+        let provider = this.getProviderForModel(instance.model);
+        let env:Record<string,string> = {};
+
+        env["LLMPROVIDER"] = provider;
+        if (instance.cli === 'gemini') {
+            env!['GEMINI_API_KEY'] = process.env.GEMINI_API_KEY || '';
+            if (provider === 'moonshot') {
+                env!['OPENAI_API_KEY'] = process.env.MOONSHOT_API_KEY || '';
+                env!['OPENAI_BASE_URL'] = process.env.MOONSHOT_BASE_URL || '';
+            } else if (provider === 'openrouter') {
+                env!['OPENAI_API_KEY'] = process.env.OPENAI_API_KEY || '';
+                env!['OPENAI_BASE_URL'] = process.env.OPENAI_BASE_URL || '';
+            }
+        }
+        return env;
+    }
+
+    private generateFilesForInstance(instance:Bot):Record<string,string> {
+        const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
+        let files:Record<string,string>={};
+        try {
+            if(instance.cli == 'gemini') {
+                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('base64');
+                files['/workspace/GEMINI.md'] = fs.readFileSync(`${volumePath}/GEMINI.md`).toString('base64');
+            } else if(instance.cli == 'claude') {
+                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('base64');
+                files['/workspace/CLAUDE.md'] = fs.readFileSync(`${volumePath}/CLAUDE.md`).toString('base64');
+            }
+        } catch(e) {
+            log(`Error generating Files for instance ${instance.id}`);
+        }
+      
+
+        return files;
     }
 
     public load() {
@@ -35,6 +89,21 @@ class ConfigManager {
         this.settings = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
         this.roles = JSON.parse(fs.readFileSync(this.rolesPath, 'utf-8'));
         this.gitKeys = JSON.parse(fs.readFileSync(this.gitKeysPath, 'utf-8'));
+
+        // Resolve provider from models.json (assume moonshot if not found)
+        const modelsPath = path.resolve(__dirname, '../../models.json');
+
+        if (fs.existsSync(modelsPath)) {
+            const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
+            this.toolModels = models.toolModels;
+            this.flashModels = models.flashModels;            
+
+        }
+
+        for(let i=0; i<this.instances.length; i++) {
+            let bot = this.instances[i]; 
+            bot.files = this.generateFilesForInstance(bot);            
+        }
     }
 
     public getInstances(): Bot[] {

@@ -31,6 +31,8 @@ RUN npm -v
 #    chown root:workspace /workspace && \
 #    chmod -R g+rwx /workspace
 
+VOLUME /workspace
+
 #Create workspace group and users - ubuntu
 RUN groupadd --gid 2000 workspace && \
     groupadd --gid 1001 exec && \
@@ -67,9 +69,11 @@ RUN git config --global user.name "Zulu Team" && \
     git config --global credential.helper '' && \
     git config --global --add safe.directory '*' && \
     npm config set prefix '~/.npm-global' && \
-    echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> ~/.ashrc && \
+    echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> ~/.bashrc && \
     cd /home/exec/gemini-cli && \
     npm install && npm run build && npm install -g .
+
+ENV PATH="/home/exec/.npm-global/bin:$PATH"
 
 # Create SSH directories for both users and setup known hosts
 # Configure PATH for the root user so it can pass this environment into the spawn() command when it runs the node websocket app
@@ -79,6 +83,7 @@ RUN mkdir -p /home/exec/.ssh /home/git/.ssh && \
     chown git:git /home/git/.ssh && chmod 700 /home/git/.ssh && \
     echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> /root/.profile
 
+ENV PATH="/home/exec/.npm-global/bin:$PATH"
 
 # Setup SSH known hosts for git user
 USER git

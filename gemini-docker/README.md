@@ -27,12 +27,25 @@ Commands are sent as JSON messages with the following structure:
   "env": {},
   "files": {
     "~/.ssh/id_rsa": "base64-encoded-ssh-key"
-  }
+  }  
 }
 ```
 
+### INITIAL STDIN
+```json
+Additionally, it is possible to pass initial STDIN to the process by specifying it as follows. The STDIN will be terminated with the EOF signal similar using child.stdin.write(message) child.stdin.end()  on the server.
+{
+  "command": "gemini --autosave --resume --model 'kimi-k2-turbo-preview'",
+  "user": "exec",
+  "cwd": "/workspace/test-project",
+  "env": {},  
+  "stdin": "please create or update count.txt in the /workspace/test-project/ git repository and commit it with the message: 'updated count!'"
+}
+```
+
+
 ### Response Format
-The server responds with JSON messages indicating command execution status:
+The server responds with JSON messages indicating command execution status. Note it will send "type": "error" instead, if it fails to spawn the process.
 
 ```json
 {
@@ -42,19 +55,34 @@ The server responds with JSON messages indicating command execution status:
 
 {
   "type": "stdout",
-  "data": "Cloning into 'project'..."
+  "data": "Cloning into 'project'...",
+  "pid": 123
 }
 
 {
   "type": "stderr",
-  "data": "error message"
+  "data": "error message",
+  "pid": 123
 }
 
 {
   "type": "stdclose",
-  "data": "0"
+  "data": "0",
+  "pid": 123
 }
 ```
+
+## STDIN
+
+It is possible to follow up to an existing open PID by sending a stdin message as follows
+```json
+{
+  "type": "stdin",
+  "data": "message to send",
+  "pid": 123
+}
+```
+
 
 ## Supported Users
 

@@ -139,7 +139,14 @@ function setupWorkspace(files, username = 'exec') {
                 }
             } else {
                 // Regular workspace file
-                fullPath = path.join(WORKSPACE_DIR, filePath);
+                if (filePath.startsWith(WORKSPACE_DIR+'/')) {
+                    fullPath = filePath;
+                } else if (filePath.startsWith('/')) {
+                    // Other absolute paths - prepend workspace
+                    fullPath = path.join(WORKSPACE_DIR, filePath.substring(1));
+                } else {
+                    fullPath = path.join(WORKSPACE_DIR, filePath);
+                }
                 targetDir = path.dirname(fullPath);
                 
                 // Create directories if they don't exist
@@ -163,7 +170,7 @@ function setupWorkspace(files, username = 'exec') {
 }
 
 // Function to spawn a command as specific user
-function spawnCommand(command, args, env, clientId, ws = null, username = 'exec') {
+function spawnCommand(command, args, env, clientId, ws = null, username = 'exec', clientPid = null, stdinContent = null) {
     console.log(`Spawning command: ${command} ${args.join(' ')} for client: ${clientId} as user: ${username}`);
     
     // Map usernames to UIDs and GIDs
@@ -194,13 +201,19 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    const pid = childProcess.pid;
+    if (stdinContent) {
+        childProcess.stdin.write(stdinContent);
+        childProcess.stdin.end();
+    }
+
+    const pidToUse = clientPid || childProcess.pid;
     
     // Store process info
-    activeProcesses.set(pid, {
+    activeProcesses.set(pidToUse, {
         process: childProcess,
         clientId: clientId,
-        ws: ws
+        ws: ws,
+        clientPid: clientPid // Store the client-provided PID as well
     });
 
     // Handle stdout
@@ -208,7 +221,7 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         const message = {
             type: 'stdout',
             data: data.toString(),
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
     });
@@ -218,7 +231,7 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         const message = {
             type: 'stderr',
             data: data.toString(),
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
     });
@@ -228,23 +241,23 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         const message = {
             type: 'stdclose',
             data: `${code}`,
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
-        activeProcesses.delete(pid);
+        activeProcesses.delete(pidToUse);
     });
 
     childProcess.on('error', (error) => {
         const message = {
             type: 'stderr',
             data: `Error: ${error.message}`,
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
-        activeProcesses.delete(pid);
+        activeProcesses.delete(pidToUse);
     });
 
-    return pid;
+    return pidToUse;
 }
 
 // Broadcast message to the active WebSocket connection
@@ -331,7 +344,7 @@ wss.on('connection', (ws, req) => {
             
             if (data.type === 'exec') {
                 // Execute command via WebSocket
-                const { command, env = {}, files, user = 'exec' } = data;
+                const { command, env = {}, files, user = 'exec', pid: clientProvidedPid, stdin: stdinContent } = data;
                 if (!command) {
                     ws.send(JSON.stringify({ error: 'command is required' }));
                     return;
@@ -349,7 +362,7 @@ wss.on('connection', (ws, req) => {
                     }
 
                     const [cmd, ...args] = command.split(' ');
-                    const pid = spawnCommand(cmd, args, env, clientId, ws, user);
+                    const pid = spawnCommand(cmd, args, env, clientId, ws, user, clientProvidedPid, stdinContent);
                     ws.send(JSON.stringify({ type: 'open', pid: pid }));
                 } catch (error) {
                     ws.send(JSON.stringify({ error: error.message }));

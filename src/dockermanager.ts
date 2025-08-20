@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
@@ -12,10 +12,10 @@ import { sendChunkedMessage } from './utils/discord';
 import templateManager from './templatemanager';
 import configManager from './configmanager';
 import { getApiUrl } from './utils/api';
+import { IChildProcess, IDocker, RunOptions,ExecOptions,ExecResult } from './utils/idocker';
+import { LocalDocker } from './utils/localdocker';
 
 dotenv.config();
-
-const execAsync = promisify(exec);
 
 type PromiseResolver = {
     resolve: (output: BotOutput) => void;
@@ -26,13 +26,17 @@ export type StoredPromise = {
     resolver: PromiseResolver;
     logs: BotOutput[];
     eventInfo: BotEvent;
-    child: ChildProcess;
+    child: IChildProcess;
 };
+
+
 
 class DockerManager {
     private openPromises: Map<string, Map<string, StoredPromise>> = new Map();
+    private docker: IDocker;
 
-    constructor() {
+    constructor(docker: IDocker) {
+        this.docker = docker;
     }
 
     public getOpenEventByInstanceAndEventId(instanceId:string, eventId:string):BotEvent|undefined {
@@ -52,11 +56,9 @@ class DockerManager {
     private async getRunningContainers(): Promise<Map<string, string>> {
         const containerMap = new Map<string, string>();
         try {
-            const { stdout } = await execAsync('docker ps --format "{{.Names}}\t{{.Image}}"');
-            const lines = stdout.split('\n').filter(line => line.trim() !== '');
-            for (const line of lines) {
-                const [name, image] = line.split('\t');
-                containerMap.set(name, image);
+            const result = await this.docker.ps();
+            for (const container of result.containers) {
+                containerMap.set(container.name, container.image);
             }
         } catch (error) {
             log('Error getting running Docker containers:', error);
@@ -100,99 +102,66 @@ class DockerManager {
                 }
 
                 const runningImage = runningContainers.get(containerName);
-        // Check current platform env
-        let currentPlatform = 'unknown';
-        try {
-            const { stdout } = await execAsync(`docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' ${containerName}`);
-            const envLines = stdout.split('\n');
-            const platformLine = envLines.find(l => l.startsWith('LLMPROVIDER='));
-            if (platformLine) currentPlatform = platformLine.split('=')[1];
-        } catch { /* ignore */ }
+                
+                // Check current platform env
+                let currentPlatform = 'unknown';
+                try {
+                    const containerInfo = await this.docker.inspect(containerName);
+                    const platformLine = containerInfo.config.env['LLMPROVIDER'];
+                    if (platformLine) currentPlatform = platformLine;
+                } catch { /* ignore */ }
 
-        const modelsPath = path.resolve(__dirname, '../models.json');
-        let expectedPlatform = 'moonshot';
-        let modelFlag = instance.model === 'auto' ? 'kimi-k2-turbo-preview' : instance.model;
-        if (fs.existsSync(modelsPath)) {
-            const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
-            const allModels = [...models.toolmodels, ...models.flashmodels];
-            const found = allModels.find((m: any) => m.id === modelFlag);
-            if (found) expectedPlatform = found.provider;
-        }
+                const modelsPath = path.resolve(__dirname, '../models.json');
+                let expectedPlatform = 'moonshot';
+                let modelFlag = instance.model === 'auto' ? 'kimi-k2-turbo-preview' : instance.model;
+                if (fs.existsSync(modelsPath)) {
+                    const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
+                    const allModels = [...models.toolmodels, ...models.flashmodels];
+                    const found = allModels.find((m: any) => m.id === modelFlag);
+                    if (found) expectedPlatform = found.provider;
+                }
 
-        if (forceRegenerate || runningImage !== expectedImage || currentPlatform !== expectedPlatform) {
-            if (forceRegenerate) {
-                log(`Force-regenerating container ${containerName}.`);
-            } else {
-                log(`Container ${containerName} needs recreation (image=${runningImage}, platform=${currentPlatform} → expected=${expectedImage}, platform=${expectedPlatform}).`);
-            }
-            await this.stopAndRemoveContainer(containerName);
-            await this.startBotContainer(instance);
-        } else {
-            log(`Container ${containerName} is correctly configured.`);
-        }
-                templateManager.applyTemplates(instance);
+                if (forceRegenerate || runningImage !== expectedImage || currentPlatform !== expectedPlatform) {
+                    if (forceRegenerate) {
+                        log(`Force-regenerating container ${containerName}.`);
+                    } else {
+                        log(`Container ${containerName} needs recreation (image=${runningImage}, platform=${currentPlatform} → expected=${expectedImage}, platform=${expectedPlatform}).`);
+                    }
+                    await this.docker.rm(containerName, true);
+                    await this.startBotContainer(instance);
+                    templateManager.applyTemplates(instance);
+                } else {
+                    log(`Container ${containerName} is correctly configured.`);
+                    templateManager.applyTemplates(instance);
+                }
             }
         }
     }
 
-    private async startBotContainer(instance: Bot) {
+
+    private async startBotContainer(instance: Bot) {        
         const imageName = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
         const containerName = `zulu-instance-${instance.id}`;
-        const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
         
-        // Build environment variables based on provider
-        const modelsPath = path.resolve(__dirname, '../models.json');
-        let provider = 'moonshot'; // default
-        let modelFlag = instance.model === 'auto' ? 'kimi-k2-turbo-preview' : instance.model;
-        if (fs.existsSync(modelsPath)) {
-            const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
-            const allModels = [...models.toolmodels, ...models.flashmodels];
-            const found = allModels.find((m: any) => m.id === modelFlag);
-            if (found) provider = found.provider;
-        }
-
-        let envVars = `-e LLMPROVIDER=${provider}`;
-        if (instance.cli === 'gemini') {
-            envVars += ` -e GEMINI_API_KEY=${process.env.GEMINI_API_KEY}`;
-            if (provider === 'moonshot') {
-                envVars += ` -e OPENAI_API_KEY=${process.env.MOONSHOT_API_KEY} -e OPENAI_BASE_URL=${process.env.MOONSHOT_BASE_URL || ''}`;
-            } else if (provider === 'openrouter') {
-                envVars += ` -e OPENAI_API_KEY=${process.env.OPENAI_API_KEY} -e OPENAI_BASE_URL=${process.env.OPENAI_BASE_URL || ''}`;
-            }
-        }
-
-        const sshDir = path.join(__dirname, `../bot-instances/${instance.id}/.ssh`);
-        let volumeMounts = `-v "${volumePath}:/workspace"`;
-        if (fs.existsSync(path.join(sshDir, 'id_ed25519'))) {
-            // Ensure the directory itself is 700 and key 600 on host before mounting
-            fs.chmodSync(sshDir, 0o700);
-            fs.chmodSync(path.join(sshDir, 'id_ed25519'), 0o600);
-            volumeMounts += ` -v "${sshDir}:/home/gemini-user/.ssh:ro"`;
-        }
-        let command = `docker run -d --name ${containerName} ${volumeMounts} --network=host ${envVars} ${imageName} sleep infinity`;
-
-        const role = configManager.getRoles()[instance.role];
-        if (role && role.mountBotInstances) {
-            const botInstancesPath = path.resolve(__dirname, '../bot-instances');
-            command = `docker run -d --name ${containerName} ${volumeMounts} -v "${volumePath}:/workspace" -v "${botInstancesPath}:/workspace/bot-instances:ro" --network=host ${envVars} ${imageName} sleep infinity`;
-        }
+        //We used to create VOLUMES here, but now FILES
+        //const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
+        //But  some things are missing like .events / .logs
+        //We really need WORKFLOWS to take the place so we can have a run based workflow that sets things up for each bot role.
+        
+        //FIXME: Do we really need to provide this to runOptions, or can we just provide to exec() which might be more secure?
+        const runOptions: RunOptions = {
+            //volumes: { [`${volumePath}`]: '/workspace' },
+            env: configManager.generateEnvForInstance(instance) //{ LLMPROVIDER: provider }
+        };
+        
 
         try {
-            await execAsync(command);
+            await this.docker.run(containerName, imageName, runOptions);
             log(`Container ${containerName} started successfully.`);
         } catch (error) {
             log(`Error starting container ${containerName}:`, error);
         }
-    }
-
-    private async stopAndRemoveContainer(containerName: string) {
-        try {
-            await execAsync(`docker rm -f ${containerName}`);
-            log(`Container ${containerName} stopped and removed.`);
-        } catch (error) {
-            log(`Error stopping or removing container ${containerName}:`, error);
-        }
-    }
+    }    
 
     public handleToolCall(instanceId: string, eventId: string, toolCallData: GeminiToolCall) {
         const instancePromises = this.openPromises.get(instanceId);
@@ -208,7 +177,7 @@ class DockerManager {
         }
     }
 
-    private createNextEventPromise(child: ChildProcess, instanceId: string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
+    private createNextEventPromise(child: IChildProcess, instanceId: string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
         return new Promise((resolve, reject) => {
             const storedPromise = this.openPromises.get(instanceId)?.get(eventId);
             if (storedPromise) {
@@ -271,16 +240,27 @@ class DockerManager {
     public async cloneProject(instance: Bot, project: Project) {
         const containerName = `zulu-instance-${instance.id}`;
         const projectPath = `/workspace/${project.name}`;
-        const gitCheckCommand = `docker exec ${containerName} [ -d "${projectPath}/.git" ]`;
+
+        const env: { [key: string]: string } = {
+            //EVENT_ID: event.id,
+            INSTANCE_ID: instance.id,
+            API_URL: getApiUrl()
+        };
+
 
         try {
-            await execAsync(gitCheckCommand);
-            log(`Project ${project.name} already exists for instance ${instance.id}.`);
-            return; // .git directory exists, so we skip cloning
+            const exists = await this.docker.fsExists(containerName, `${projectPath}/.git`);
+            if (exists) {
+                log(`Project ${project.name} already exists for instance ${instance.id}.`);
+                return; // .git directory exists, so we skip cloning
+            }
         } catch (error) {
-            // .git directory does not exist, proceed with cloning
-            log(`Cloning project ${project.name} for instance ${instance.id}`);
+            // If fsExists throws, it means the container might not be running or other issues.
+            // We'll log and proceed with cloning, assuming it doesn't exist or needs recreation.
+            log(`Error checking for existing project ${project.name} in container ${containerName}:`, error);
         }
+
+        log(`Cloning project ${project.name} for instance ${instance.id}`);
 
         const gitKeys = configManager.getGitKeys();
         const key = gitKeys.find((k: any) => k.id === project.gitKeyId);
@@ -289,21 +269,16 @@ class DockerManager {
             return;
         }
 
-        // Decode base64 private key if encoded
-        let privateKeyContent = key.privateKey;
-        const sshDir = path.join(__dirname, `../bot-instances/${instance.id}/.ssh`);        
-        if (key.encoding === 'base64') {
-            console.log("Writing key to "+path.join(sshDir, key.id));
-            privateKeyContent = Buffer.from(key.privateKey, 'base64').toString('utf-8');
-            fs.writeFileSync(path.join(sshDir, key.id), privateKeyContent, { mode: 0o600 });
-        }
-                      
-//mkdir -p /workspace/.ssh
-//echo '${privateKeyContent.replace(/'/g, "'\"'\"'")}' > ${keyPath}
-//chmod 600 ${keyPath}
+        let gitExecOptions:ExecOptions = {
+            user: 'git',
+            env: env,
+            cwd: '/workspace',
+            stdin: true
+        }                   
+        gitExecOptions.files = {};
+        gitExecOptions.files['~/.ssh/'+key.id] = key.privateKey; //provide to server
 
-
-        const keyPath = `/workspace/.ssh/${key.id}`;
+        const keyPath = `~/.ssh/${key.id}`;
         const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no`;
         const repoUrl = project.repositoryUrl.replace('https://github.com/', 'git@github.com:');
 
@@ -312,11 +287,11 @@ class DockerManager {
 set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
 `;
 
-        const command = `docker exec -i ${containerName} bash -c '${cloneScript.replace(/"/g, '\"')}'`;
-        log(`Running clone command: ${command}`);
+        const command = `${cloneScript.replace(/"/g, '\"')}`;
+        log(`Running clone command: docker exec -i ${containerName} ${command}`);
 
         try {
-            const { stdout, stderr } = await execAsync(command);
+            const { stdout, stderr } = await this.docker.exec(containerName, command, gitExecOptions);
             log(`Clone stdout: ${stdout}`);
             if (stderr) log(`Clone stderr: ${stderr}`);
             log(`Project ${project.name} cloned successfully into ${containerName}:${projectPath}.`);
@@ -328,6 +303,18 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
     private activationQueue: Map<string, Promise<BotOutput>> = new Map();
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        const env: { [key: string]: string } = {
+            EVENT_ID: event.id,
+            INSTANCE_ID: instance.id,
+            API_URL: getApiUrl()
+        };
+
+        let gitExecOptions:ExecOptions = {
+            user: 'git',
+            env: env,
+            cwd: '/workspace',
+            stdin: true,
+        }
         // Existing activation logic (cloning and container exec)
         if (event instanceof DelegationBotEvent) {
             const project = configManager.getProjects().find(p => p.name === event.project);
@@ -339,7 +326,7 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                     const projectPath = `/workspace/${project.name}`;
                     try {
                         // Ensure project directory exists before checkout
-                        await execAsync(`docker exec ${containerName} bash -c "test -d ${projectPath} || exit 1"`);
+                        await this.docker.exec(containerName, `bash -c "test -d ${projectPath} || exit 1"`,gitExecOptions);
                         
                         // Create branch if it doesn't exist, then checkout
                         const branchScript = `
@@ -357,7 +344,7 @@ else
     git checkout -b ${event.branch}
 fi
 `;
-                        await execAsync(`docker exec ${containerName} bash -c "${branchScript}"`);
+                        await this.docker.exec(containerName, `bash -c "${branchScript}"`);
                         log(`Checked out branch ${event.branch} for project ${project.name}`);
                     } catch (err) {
                         log(`Failed to checkout branch ${event.branch} for project ${project.name}:`, err);
@@ -387,15 +374,8 @@ fi
             modelFlag = instance.model;
         }
 
-        // Resolve provider from models.json (assume moonshot if not found)
-        const modelsPath = path.resolve(__dirname, '../models.json');
-        let provider = 'moonshot';
-        if (fs.existsSync(modelsPath)) {
-            const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
-            const allModels = [...models.toolmodels, ...models.flashmodels];
-            const found = allModels.find((m: any) => m.id === modelFlag);
-            if (found) provider = found.provider;
-        }
+        let provider = configManager.getProviderForModel(modelFlag);
+
 
         let cliCommand: string;
         if (instance.cli === 'gemini') {
@@ -404,28 +384,23 @@ fi
             } else {
                 // openrouter
                 const preset = instance.preset === 'auto' ? '' : `@preset/${instance.preset}`;
-                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}${preset}" --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
+                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}${preset}"a --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
             }
         } else {
             cliCommand = `cd /workspace && claude --dangerously-skip-permissions --continue --model ${instance.model}`;
         }
-        const env: { [key: string]: string } = {
-            EVENT_ID: event.id,
-            INSTANCE_ID: instance.id,
-            API_URL: getApiUrl()
+
+        const execOptions: ExecOptions = {
+            user: 'exec',
+            env: env,
+            cwd: '/workspace',
+            stdin: true,
+            files: instance.files
         };
-        const spawnArgs = ['exec', '-i'];
-        for (const key in env) {
-            spawnArgs.push('-e', `${key}=${env[key]}`);
-        }
-        spawnArgs.push(containerName, 'bash', '-c', cliCommand);
-        const fullCmd = `docker ${spawnArgs.join(' ')}`;
-        log(`Activating bot ${instance.id} in container ${containerName} with command: ${fullCmd}`);
-        const child = spawn('docker', spawnArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-        if (messageContent) {
-            child.stdin.write(messageContent);
-            child.stdin.end();
-        }
+        //log(`About to activate bot ${instance.id} with files: ${Object.entries(instance.files)}`);
+        log(`Activating bot ${instance.id} in container ${containerName} with command: ${cliCommand}`);
+        const child = await this.docker.spawnExec(containerName, cliCommand, execOptions, messageContent);
+
         return new Promise((resolve, reject) => {
             if (!this.openPromises.has(instance.id)) {
                 this.openPromises.set(instance.id, new Map());
@@ -437,6 +412,7 @@ fi
                 child: child
             });
             child.stdout?.once('data', (data: Buffer) => {
+                console.log("[STDOUT]:"+data);
                 resolve({
                     type: BotEventType.STDOUT,
                     output: data.toString(),
@@ -451,6 +427,7 @@ fi
             //     });
             // });
             child.once('close', (code: number) => {
+                console.log("[CLOSE]:"+code);
                 this.openPromises.get(instance.id)?.delete(event.id);
                 resolve({
                     type: BotEventType.CLOSE,
@@ -479,4 +456,4 @@ fi
     }
 }
 
-export default new DockerManager();
+export default new DockerManager(new LocalDocker());

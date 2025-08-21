@@ -4,6 +4,9 @@ import { Model,Bot, Project, BotSettings } from './bots/types';
 import {log} from './utils/log'
 import { env } from 'process';
 import { stringify } from 'querystring';
+import { getApiUrl } from './utils/api';
+import * as dotenv from 'dotenv';
+dotenv.config();
 
 class ConfigManager {
     private instances: Bot[];
@@ -51,11 +54,19 @@ class ConfigManager {
         let env:Record<string,string> = {};
 
         env["LLMPROVIDER"] = provider;
+        // Generate a random API_KEY for the bot instance
+        const instanceApiKey = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        env["API_KEY"] = instanceApiKey;
+        env["INSTANCE_ID"] = instance.id;
+        env["API_URL"] = getApiUrl();
+
+        log("Instance cli is type: "+instance.cli);
+
         if (instance.cli === 'gemini') {
             env!['GEMINI_API_KEY'] = process.env.GEMINI_API_KEY || '';
             if (provider === 'moonshot') {
                 env!['OPENAI_API_KEY'] = process.env.MOONSHOT_API_KEY || '';
-                env!['OPENAI_BASE_URL'] = process.env.MOONSHOT_BASE_URL || '';
+                env!['OPENAI_BASE_URL'] = process.env.MOONSHOT_BASE_URL || '';                
             } else if (provider === 'openrouter') {
                 env!['OPENAI_API_KEY'] = process.env.OPENAI_API_KEY || '';
                 env!['OPENAI_BASE_URL'] = process.env.OPENAI_BASE_URL || '';
@@ -103,6 +114,7 @@ class ConfigManager {
         for(let i=0; i<this.instances.length; i++) {
             let bot = this.instances[i]; 
             bot.files = this.generateFilesForInstance(bot);            
+            bot.env = this.generateEnvForInstance(bot);
         }
     }
 

@@ -14,6 +14,8 @@ import configManager from './configmanager';
 import { getApiUrl } from './utils/api';
 import { IChildProcess, IDocker, RunOptions,ExecOptions,ExecResult } from './utils/idocker';
 import { LocalDocker } from './utils/localdocker';
+import { WSDocker } from './utils/wsdocker';
+import configmanager from './configmanager';
 
 dotenv.config();
 
@@ -27,6 +29,7 @@ export type StoredPromise = {
     logs: BotOutput[];
     eventInfo: BotEvent;
     child: IChildProcess;
+    
 };
 
 
@@ -110,16 +113,9 @@ class DockerManager {
                     const platformLine = containerInfo.config.env['LLMPROVIDER'];
                     if (platformLine) currentPlatform = platformLine;
                 } catch { /* ignore */ }
-
-                const modelsPath = path.resolve(__dirname, '../models.json');
-                let expectedPlatform = 'moonshot';
-                let modelFlag = instance.model === 'auto' ? 'kimi-k2-turbo-preview' : instance.model;
-                if (fs.existsSync(modelsPath)) {
-                    const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
-                    const allModels = [...models.toolmodels, ...models.flashmodels];
-                    const found = allModels.find((m: any) => m.id === modelFlag);
-                    if (found) expectedPlatform = found.provider;
-                }
+                
+                let expectedPlatform = configmanager.getProviderForModel(instance.model);                
+   
 
                 if (forceRegenerate || runningImage !== expectedImage || currentPlatform !== expectedPlatform) {
                     if (forceRegenerate) {
@@ -151,7 +147,7 @@ class DockerManager {
         //FIXME: Do we really need to provide this to runOptions, or can we just provide to exec() which might be more secure?
         const runOptions: RunOptions = {
             //volumes: { [`${volumePath}`]: '/workspace' },
-            env: configManager.generateEnvForInstance(instance) //{ LLMPROVIDER: provider }
+            env: instance.env //This might not needed anymore because exec passes it, but i think we use it to verify the container //{ LLMPROVIDER: provider } 
         };
         
 
@@ -186,11 +182,12 @@ class DockerManager {
 
             let fullResponse = '';
             const stdoutListener = (data: Buffer) => {
+                console.log("[NEXT-STDOUT]:"+data);
                 const output = data.toString();
                 fullResponse += output;
-//                if (statusMessage) {
-//                    sendChunkedMessage(statusMessage, fullResponse);
-//                }
+                //if (statusMessage) {
+                //    sendChunkedMessage(statusMessage, fullResponse);
+                //}
                 cleanup();
                 resolve({
                     type: BotEventType.STDOUT,
@@ -223,6 +220,7 @@ class DockerManager {
                 reject(err);
             };
 
+
             const cleanup = () => {
                 child.stdout?.removeListener('data', stdoutListener);
                 child.stderr?.removeListener('data', stderrListener);
@@ -241,11 +239,7 @@ class DockerManager {
         const containerName = `zulu-instance-${instance.id}`;
         const projectPath = `/workspace/${project.name}`;
 
-        const env: { [key: string]: string } = {
-            //EVENT_ID: event.id,
-            INSTANCE_ID: instance.id,
-            API_URL: getApiUrl()
-        };
+        const env = instance.env; // { [key: string]: string } = { /*EVENT_ID: event.id,*/ INSTANCE_ID: instance.id, API_URL: getApiUrl() };
 
 
         try {
@@ -303,11 +297,9 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
     private activationQueue: Map<string, Promise<BotOutput>> = new Map();
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
-        const env: { [key: string]: string } = {
-            EVENT_ID: event.id,
-            INSTANCE_ID: instance.id,
-            API_URL: getApiUrl()
-        };
+        const env:Record<string,string> = {}; 
+        Object.assign(env,instance.env);
+        env.EVENT_ID = event.id; 
 
         let gitExecOptions:ExecOptions = {
             user: 'git',
@@ -411,33 +403,57 @@ fi
                 eventInfo: event,
                 child: child
             });
-            child.stdout?.once('data', (data: Buffer) => {
-                console.log("[STDOUT]:"+data);
-                resolve({
-                    type: BotEventType.STDOUT,
-                    output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
-                });
-            });
-            // child.stderr?.once('data', (data: Buffer) => {
-            //     resolve({
-            //         type: BotEventType.STDERR,
-            //         output: data.toString(),
-            //         next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
-            //     });
-            // });
-            child.once('close', (code: number) => {
-                console.log("[CLOSE]:"+code);
+
+
+           const cleanup = () => {
+                child.removeListener('close', closeListener);
+                child.removeListener('error', errorListener);
+                child.stdout?.removeListener('data', stdoutListener);
+                child.stderr?.removeListener('data', stderrListener);
+            };
+
+            const closeListener = (code: number) => {
+                cleanup();
+                log("[CLOSE]:"+code);
                 this.openPromises.get(instance.id)?.delete(event.id);
                 resolve({
                     type: BotEventType.CLOSE,
                     output: `Process exited with code ${code}`,
                 });
-            });
-            child.once('error', (err: Error) => {
+            };
+            const errorListener = (err: Error) => {
+                cleanup();
+                log("[ERROR]:"+err);
                 this.openPromises.get(instance.id)?.delete(event.id);
                 reject(err);
-            });
+            };
+            const stdoutListener = (data: Buffer) => {
+                console.log("[STDOUT]:"+data);
+                //Remove the close/error event handlers since createNextEventPromise will handle it from here on out.
+                cleanup();
+                resolve({
+                    type: BotEventType.STDOUT,
+                    output: data.toString(),
+                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
+                });
+            }
+            const stderrListener = (data: Buffer) => {
+                console.log("[STDERR]:"+data);
+                cleanup();
+                resolve({
+                    type: BotEventType.STDERR,
+                    output: data.toString(),
+                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
+                });
+            }
+
+        
+
+            child.once('close', closeListener);
+            child.once('error', errorListener);        
+            child.stdout?.once('data', stdoutListener);
+            child.stderr?.once('data', stderrListener);
+
         });
     }
 
@@ -454,6 +470,8 @@ fi
         this.activationQueue.set(instance.id, queued);
         return queued;
     }
+
+
 }
 
 export default new DockerManager(new LocalDocker());

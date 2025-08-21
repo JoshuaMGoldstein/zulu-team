@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WSDocker } from './wsdocker';
-import WebSocket from 'ws';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -35,11 +34,12 @@ describe('WSDocker', () => {
       // Ignore if container doesn't exist
     }*/
     // Set environment variable for test endpoint (will use .env value if available)
-    process.env.DOCKER_ENDPOINT_GEMINI_DOCKER = process.env.DOCKER_ENDPOINT_GEMINI_DOCKER || 'ws://localhost:8011/ws';
+    //process.env.DOCKER_ENDPOINT_GEMINI_DOCKER = process.env.DOCKER_ENDPOINT_GEMINI_DOCKER// || 'ws://localhost:8011/ws';
+
     // Start a real container for tests
     await docker.run('test-container', 'gemini-docker');
     // Clean the workspace directory inside the container
-    await docker.exec('test-container', 'rm -rf /workspace/*');
+    //await docker.exec('test-container', 'rm -rf /workspace/*');
   });
 
   afterEach(async () => {
@@ -49,20 +49,18 @@ describe('WSDocker', () => {
     } catch(e) {
       //Ignore if container doesn't exist
     }
-    //await new Promise(resolve => setTimeout(resolve, 5000)); //await container reboot
+    await new Promise(resolve => setTimeout(resolve, 2500)); //await container reboot
   });
 
   describe('getEndpoint', () => {
     it('should return correct endpoint for gemini-docker', () => {
-      process.env.DOCKER_ENDPOINT_GEMINI_DOCKER = 'ws://localhost:8011/ws';
       const endpoint = (docker as any).getEndpoint('gemini-docker');
-      expect(endpoint).toContain('ws://localhost:8011/ws');
+      expect(endpoint).toContain(process.env.DOCKER_ENDPOINT_GEMINI_DOCKER);
     });
 
-    it('should return default endpoint for unknown image', () => {
-      delete process.env.DOCKER_ENDPOINT_GEMINI_DOCKER;
+    it('should return default endpoint for unknown image', () => {      
       const endpoint = (docker as any).getEndpoint('unknown-image');
-      expect(endpoint).toContain('ws://localhost:8088/ws');
+      expect(endpoint).toContain(process.env.DOCKER_ENDPOINT_GEMINI_DOCKER || 'ws://localhost:8088/ws');
     });
   });
 

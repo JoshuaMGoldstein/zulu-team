@@ -8,11 +8,11 @@ export default defineConfig({
     exclude: ['node_modules', 'dist'],
     testTimeout: 30000,
     hookTimeout: 60000,
-    maxConcurrency: 1,
+    maxConcurrency: 1,    
     sequence: {
       concurrent: false,
-      shuffle: false,
-      hooks: 'list'
+      shuffle: true,
+      hooks: 'parallel'
     }
   },
   resolve: {

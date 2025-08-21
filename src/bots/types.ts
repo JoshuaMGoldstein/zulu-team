@@ -33,6 +33,7 @@ export enum BotEventType {
     STDERR = 'STDERR',
     TOOLCALL = 'TOOLCALL',
     CLOSE = 'CLOSE',
+    ERROR = 'ERROR',
 }
 
 export interface BotOutput {
@@ -75,7 +76,8 @@ export interface Bot {
     managedProjects:string | string[];
 
     //Runtime settings (currently generated in dockermanager.ts, but maybe should be moved to templatemanager.ts)
-    files:Record<string,string>
+    files:Record<string,string>;
+    env: Record<string,string>;
 }
 
 export enum Verbosity {

@@ -2,6 +2,9 @@ import { createGui } from './gui';
 import apiServer from './apiserver';
 import { log } from './utils/log';
 import { updateModelsFile } from './models';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
 
 const main = async () => {
     const guiServer = createGui();

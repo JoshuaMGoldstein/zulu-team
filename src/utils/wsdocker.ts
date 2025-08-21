@@ -63,6 +63,9 @@ export class WSDockerProcess implements IChildProcess {
         if (this.eventListeners.has(eventName)) {
             this.eventListeners.get(eventName)!.delete(listener);
         }
+        if (this.onceEventListeners.has(eventName)) {
+            this.onceEventListeners.get(eventName)!.delete(listener);
+        }
     }
 
     private addOnceListener(eventName: string, listener: Function) {
@@ -73,14 +76,22 @@ export class WSDockerProcess implements IChildProcess {
     }
 
     emit(eventName: string, ...args: any[]) {
+        console.log(`Emitting event: ${eventName} with args: ${args}`)
         // Emit regular listeners
         if (this.eventListeners.has(eventName)) {
-            this.eventListeners.get(eventName)!.forEach(listener => listener(...args));
+            // Create a copy to prevent issues if listeners modify the set during iteration
+            const listeners = new Set(this.eventListeners.get(eventName)!);
+            listeners.forEach(listener => { console.log(`Calling eventlistener for event ${eventName}`); listener(...args) });
         }
         // Emit once listeners and then clear them
         if (this.onceEventListeners.has(eventName)) {
-            this.onceEventListeners.get(eventName)!.forEach(listener => listener(...args));
-            this.onceEventListeners.delete(eventName);
+            // Create a copy to prevent issues if listeners modify the set during iteration
+            const onceListeners = new Set(this.onceEventListeners.get(eventName)!);
+            onceListeners.forEach(listener => { 
+                this.onceEventListeners.get(eventName)?.delete(listener);
+                console.log(`Calling oncelistener for event ${eventName}`); 
+                listener(...args) 
+            });            
         }
     }
 }

@@ -29,7 +29,39 @@ class ApiServer {
     constructor() {
         this.app = createServer();
         this.app.use(express.json());
+        this.app.use(this.authenticateToken.bind(this));
         this.setupRoutes();
+    }
+
+    private authenticateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+        // Allow unauthenticated access to /bots (GET) as it's for listing available bots
+        if (req.path === '/bots' && req.method === 'GET') {
+            return next();
+        }
+
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).send('Access Denied: No Token Provided!');
+        }
+
+        // Check against master API token
+        if (token === process.env.API_TOKEN) {
+            return next();
+        }
+
+        // Check against instance-specific API token
+        const instanceId = req.header('X-Instance-Id');
+        if (instanceId) {
+            const instance = configManager.getInstances().find(inst => inst.id === instanceId);
+            if (instance && instance.env && instance.env['API_KEY'] === token) {
+                return next();
+            }
+        }
+
+        log("Bad authentication received!")
+        return res.status(403).send('Access Denied: Invalid Token!');
     }
 
     public initBots(instanceIds?: string[]) {

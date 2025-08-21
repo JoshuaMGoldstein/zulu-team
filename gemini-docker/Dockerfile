@@ -58,8 +58,10 @@ RUN git config --global user.name "Zulu Team - GIT" && \
 USER root
 RUN --mount=type=secret,id=github_token \
     git clone "https://$(cat /run/secrets/github_token)@github.com/JoshuaMGoldstein/gemini-cli.git" \
-    /home/exec/gemini-cli && \
-    chown -R exec:exec /home/exec/gemini-cli
+    /srv/gemini-cli && \
+    chown -R exec:exec /srv/gemini-cli    
+
+
 
 # Configure npm for exec user
 USER exec
@@ -70,18 +72,22 @@ RUN git config --global user.name "Zulu Team" && \
     git config --global --add safe.directory '*' && \
     npm config set prefix '~/.npm-global' && \
     echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> ~/.bashrc && \
-    cd /home/exec/gemini-cli && \
+    cd /srv/gemini-cli && \
     npm install && npm run build && npm install -g .
 
 ENV PATH="/home/exec/.npm-global/bin:$PATH"
 
 # Create SSH directories for both users and setup known hosts
 # Configure PATH for the root user so it can pass this environment into the spawn() command when it runs the node websocket app
+
 USER root
 RUN mkdir -p /home/exec/.ssh /home/git/.ssh && \
     chown exec:exec /home/exec/.ssh && chmod 700 /home/exec/.ssh && \
     chown git:git /home/git/.ssh && chmod 700 /home/git/.ssh && \
-    echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> /root/.profile
+    echo 'export PATH="/home/exec/.npm-global/bin:$PATH"' >> /root/.profile 
+
+# Make user home directory non writable so they dont do dumb shit outside /workspace - this is no good because it makes .gemini unwritable.
+#&& \    chmod -R u-w /home/exec
 
 ENV PATH="/home/exec/.npm-global/bin:$PATH"
 

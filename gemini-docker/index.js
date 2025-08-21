@@ -67,13 +67,18 @@ function resetIdleTimeout() {
             activeWebSocket.close(1001, 'Idle timeout');
         }
         // Kill the container
-        exec('kill 1', (error) => {
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');
+        //FIXME: GET MORE ANGRY ABOUT SECURITY AND ROTATE USERIDS
+
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     }, timeoutSeconds * 1000);
 }
 
@@ -410,13 +415,16 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container
         console.log('WebSocket closed, rebooting container');
-        exec('kill 1', (error) => {
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     });
 
     // Handle errors
@@ -432,13 +440,16 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container on error
         console.log('WebSocket error, rebooting container');
-        exec('kill 1', (error) => {
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     });
 });
 

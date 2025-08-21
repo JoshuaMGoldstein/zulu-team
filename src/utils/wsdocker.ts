@@ -10,7 +10,7 @@ export class WSDockerProcess implements IChildProcess {
     private eventListeners: Map<string, Set<Function>> = new Map();
     private onceEventListeners: Map<string, Set<Function>> = new Map();
 
-    constructor(private ws: WebSocket, public pid: string) {
+    constructor(private ws: WebSocket, public pid: string, public containerName: string) {
         this.stdin = {
             write: (data: string) => {
                 this.ws.send(JSON.stringify({ type: 'stdin', pid: this.pid, data }));
@@ -191,10 +191,10 @@ export class WSDocker implements IDocker {
                 this.connections.delete(containerName);
                 // Emit close for any active child processes associated with this connection
                 this.childProcesses.forEach((child, pid) => {
-                    // This is a simplification; ideally, we'd track which child processes belong to which container
-                    // For now, if a connection closes, we assume all its child processes also close.
-                    child.emit('close', code || 1); // Emit a non-zero exit code on unexpected close
-                    this.childProcesses.delete(pid);
+                    if (child.containerName === containerName) {
+                        child.emit('close', code || 1); // Emit a non-zero exit code on unexpected close
+                        this.childProcesses.delete(pid);
+                    }
                 });
             });
         });
@@ -382,7 +382,7 @@ export class WSDocker implements IDocker {
                 }, options.timeout);
             }
 
-            const childProcess = new WSDockerProcess(connection.ws, message.pid);
+            const childProcess = new WSDockerProcess(connection.ws, message.pid, containerName);
             this.childProcesses.set(message.pid, childProcess);
 
             childProcess.stdout?.on('data', (data) => {
@@ -423,7 +423,7 @@ export class WSDocker implements IDocker {
         }
 
         const pid = randomUUID(); // Unique PID for this spawned process
-        const childProcess = new WSDockerProcess(connection.ws, pid);
+        const childProcess = new WSDockerProcess(connection.ws, pid, containerName);
         this.childProcesses.set(pid, childProcess);
 
         const message = {

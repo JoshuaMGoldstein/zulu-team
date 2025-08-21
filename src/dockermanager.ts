@@ -36,6 +36,7 @@ export type StoredPromise = {
 
 class DockerManager {
     private openPromises: Map<string, Map<string, StoredPromise>> = new Map();
+    private activationQueue: Map<string, Promise<BotOutput>> = new Map();
     private docker: IDocker;
 
     constructor(docker: IDocker) {
@@ -124,8 +125,8 @@ class DockerManager {
                         log(`Container ${containerName} needs recreation (image=${runningImage}, platform=${currentPlatform} → expected=${expectedImage}, platform=${expectedPlatform}).`);
                     }
                     await this.docker.rm(containerName, true);
-                    await this.startBotContainer(instance);
                     templateManager.applyTemplates(instance);
+                    await this.startBotContainer(instance);
                 } else {
                     log(`Container ${containerName} is correctly configured.`);
                     templateManager.applyTemplates(instance);
@@ -158,6 +159,18 @@ class DockerManager {
             log(`Error starting container ${containerName}:`, error);
         }
     }    
+
+    private async _ensureContainerIsRunning(instance: Bot): Promise<void> {
+        const containerName = `zulu-instance-${instance.id}`;
+        try {
+            await this.docker.inspect(containerName);
+            log(`Container ${containerName} is already running.`);
+        } catch (error) {
+            log(`Container ${containerName} is not running or not found. Attempting to restart...`);
+            templateManager.applyTemplates(instance);
+            await this.startBotContainer(instance);
+        }
+    }
 
     public handleToolCall(instanceId: string, eventId: string, toolCallData: GeminiToolCall) {
         const instancePromises = this.openPromises.get(instanceId);
@@ -293,8 +306,6 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
             log(`Error cloning project ${project.name} into ${containerName}:`, error);
         }
     }
-
-    private activationQueue: Map<string, Promise<BotOutput>> = new Map();
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
         const env:Record<string,string> = {}; 
@@ -458,6 +469,7 @@ fi
     }
 
     public async activateBot(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        await this._ensureContainerIsRunning(instance);
         // Queue handling: ensure only one activation per bot at a time
         const previous = this.activationQueue.get(instance.id) || Promise.resolve();
         const queued = previous.then(() => this._runActivation(instance, event, statusMessage));
@@ -474,4 +486,4 @@ fi
 
 }
 
-export default new DockerManager(new LocalDocker());
+export default new DockerManager(new WSDocker());

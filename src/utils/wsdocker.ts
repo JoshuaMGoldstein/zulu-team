@@ -341,10 +341,11 @@ export class WSDocker implements IDocker {
         const mergedFiles: Record<string, string> = { ...containerFiles };
         
         // Process options.files and ensure base64 encoding
-        if (options?.files) {
+        //They are already base64 encoded
+        /*if (options?.files) {
             const encodedFiles = this.encodeFilesToBase64(options.files);
             Object.assign(mergedFiles, encodedFiles);
-        }
+        }*/
 
         console.log(`mergedFiles for exec: ${JSON.stringify(mergedFiles)}`)
 
@@ -420,7 +421,7 @@ export class WSDocker implements IDocker {
             user: options?.user || 'exec',
             cwd: options?.cwd || '/workspace',
             env: { ...connection.env, ...options?.env },
-            files: options?.files ? this.encodeFilesToBase64(options.files) : {},
+            files: options?.files ? options.files : {}, //this.encodeFilesToBase64(options.files)
             stdin: stdinContent,
             pid: pid
         };

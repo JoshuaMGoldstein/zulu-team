@@ -283,7 +283,7 @@ class DockerManager {
             stdin: true
         }                   
         gitExecOptions.files = {};
-        gitExecOptions.files['~/.ssh/'+key.id] = key.privateKey; //provide to server
+        gitExecOptions.files['~/.ssh/'+key.id] = key.privateKey;
 
         const keyPath = `~/.ssh/${key.id}`;
         const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no`;

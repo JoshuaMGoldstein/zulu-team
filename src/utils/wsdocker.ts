@@ -100,7 +100,7 @@ class WSDockerConnection {
     constructor(public ws: WebSocket, public imageName: string) {
 
     }
-    public files: Record<string, string> = {}
+    public files: Record<string, string|Buffer> = {}
     public env: Record<string, string> = {}
 }
 
@@ -200,33 +200,32 @@ export class WSDocker implements IDocker {
         });
     }
 
-    async fsExists(containerName: string, filePath: string): Promise<boolean> {
+    async fsExists(containerName: string, filePath: string, options?:ExecOptions): Promise<boolean> {
         try {
-            const result = await this.exec(containerName, `[ -e "${filePath}" ] && echo "exists" || echo "not found"`);
+            const result = await this.exec(containerName, `[ -e "${filePath}" ] && echo "exists" || echo "not found"`, options);
             return result.stdout.trim() === 'exists';
         } catch (error) {
             return false;
         }
     }
 
-    async fsWriteFile(containerName: string, filePath: string, content: string, mode?: number): Promise<void> {
+    async fsWriteFile(containerName: string, filePath: string, content: string|Buffer, mode?: number, options?: ExecOptions): Promise<void> {
         let connection = this.connections.get(containerName);
         if(!connection) {
             throw new Error("No container named "+containerName+" found");
         }
-        
-        const files = connection.files;
-        // Use helper function for consistent base64 encoding
-        const encodedFiles = this.encodeFilesToBase64({ [filePath]: content });
-        Object.assign(files, encodedFiles);
+
+        connection.files[filePath] = content;
         
         if (mode !== undefined) {
-            await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`);
+            await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`, options);
+        } else {
+            await this.exec(containerName, `:`, options);
         }
     }
 
-    async fsChmod(containerName: string, filePath: string, mode: number): Promise<void> {
-        await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`);
+    async fsChmod(containerName: string, filePath: string, mode: number, options?:ExecOptions): Promise<void> {
+        await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`, options);
     }
 
     async run(containerName: string, imageName: string, options?: RunOptions): Promise<ContainerInfo> {
@@ -308,13 +307,13 @@ export class WSDocker implements IDocker {
                     loadFilesRecursive(path.join(relativePath, item));
                 }
             } else {
-                const content = fs.readFileSync(fullPath, 'utf-8');
+                const content:Buffer = fs.readFileSync(fullPath);
+                console.log(`Content of volume file: ${fullPath} : ${content} - typeof: ${typeof content}`);
                 const containerPath = path.join(destinationPath, relativePath);
                 console.log(`Loading file: ${fullPath} -> ${containerPath}`);
-                // Use helper function for consistent base64 encoding
-                const encodedFiles = this.encodeFilesToBase64({ [containerPath]: content });
+                // Use helper function for consistent base64 encoding                
                 if (!connection.files) connection.files = {};
-                Object.assign(connection.files, encodedFiles);
+                Object.assign(connection.files, { [containerPath]: content });
             }
         };
 
@@ -335,30 +334,16 @@ export class WSDocker implements IDocker {
         const connection = this.connections.get(containerName);
         if (!connection) {
             throw new Error(`Container ${containerName} not found`);
-        }
-
-        console.log(`options.env for exec: ${JSON.stringify(options?.env)}`)
+        }  
 
         // Merge environment variables
         const containerEnv = connection.env;
         const mergedEnv = { ...containerEnv, ...options?.env };
 
-        console.log(`mergedEnv for exec: ${JSON.stringify(mergedEnv)}`)
-        
-        console.log(`options.files for exec: ${JSON.stringify(options?.files)}`)
-
-        // Merge files and ensure base64 encoding
+        // Merge files
         const containerFiles = connection.files;
-        const mergedFiles: Record<string, string> = { ...containerFiles };
+        const mergedFiles: Record<string, string|Buffer> = { ...containerFiles, ...options?.files };
         
-        // Process options.files and ensure base64 encoding
-        //They are already base64 encoded
-        /*if (options?.files) {
-            const encodedFiles = this.encodeFilesToBase64(options.files);
-            Object.assign(mergedFiles, encodedFiles);
-        }*/
-
-        console.log(`mergedFiles for exec: ${JSON.stringify(mergedFiles)}`)
 
         const message = {
             type: 'exec',
@@ -366,9 +351,10 @@ export class WSDocker implements IDocker {
             user: options?.user || 'exec',
             cwd: options?.cwd || '/workspace',
             env: mergedEnv,
-            files: mergedFiles,
+            files: this.encodeFilesToBase64(mergedFiles),
             pid: randomUUID() // Assign a unique PID for this execution
         };
+
 
         return new Promise((resolve, reject) => {
             let stdout = '';
@@ -432,7 +418,7 @@ export class WSDocker implements IDocker {
             user: options?.user || 'exec',
             cwd: options?.cwd || '/workspace',
             env: { ...connection.env, ...options?.env },
-            files: options?.files ? options.files : {}, //this.encodeFilesToBase64(options.files)
+            files: options?.files ? this.encodeFilesToBase64(options.files) : {},
             stdin: stdinContent,
             pid: pid
         };

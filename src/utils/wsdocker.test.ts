@@ -88,7 +88,7 @@ describe('WSDocker', () => {
       await docker.fsWriteFile('test-container', '/path/to/file', 'Hello World');
       
       const connection = (docker as any).connections.get('test-container');
-      expect(connection.files['/path/to/file']).toBe(Buffer.from('Hello World').toString('base64'));
+      expect(connection.files['/path/to/file'].toString()).toBe(Buffer.from('Hello World').toString());
     });
 
     it('should handle chmod after writing file', async () => {
@@ -100,7 +100,7 @@ describe('WSDocker', () => {
 
       await docker.fsWriteFile('test-container', '/path/to/file', 'Hello World', 0o600);
       
-      expect(mockExec).toHaveBeenCalledWith('test-container', 'chmod 600 "/path/to/file"');
+      expect(mockExec).toHaveBeenCalledWith('test-container', 'chmod 600 "/path/to/file"', undefined);
     });
   });
 
@@ -160,14 +160,14 @@ describe('WSDocker', () => {
         .mockReturnValueOnce({ isDirectory: () => false } as fs.Stats);
       const mockReadDir = vi.mocked(fs.readdirSync).mockReturnValue(['file1.txt', 'file2.txt'] as any);
       const mockReadFile = vi.mocked(fs.readFileSync)
-        .mockReturnValueOnce('content1')
-        .mockReturnValueOnce('content2');
+        .mockReturnValueOnce(Buffer.from('content1', 'utf-8'))
+        .mockReturnValueOnce(Buffer.from('content2', 'utf-8'));
 
       await (docker as any).loadVolumeFiles('test-container', '/host/path', '/container/path');
       
       const connection = (docker as any).connections.get('test-container');
-      expect(connection.files['/container/path/file1.txt']).toBe(Buffer.from('content1').toString('base64'));
-      expect(connection.files['/container/path/file2.txt']).toBe(Buffer.from('content2').toString('base64'));
+      expect(connection.files['/container/path/file1.txt'].toString()).toBe(Buffer.from('content1').toString());
+      expect(connection.files['/container/path/file2.txt'].toString()).toBe(Buffer.from('content2').toString());
     });
 
     it('should handle nested directories', async () => {
@@ -184,7 +184,7 @@ describe('WSDocker', () => {
       await (docker as any).loadVolumeFiles('test-container', '/host/path', '/container/path');
       
       const connection = (docker as any).connections.get('test-container');
-      expect(connection.files['/container/path/subdir/nested.txt']).toBe(Buffer.from('nested content').toString('base64'));
+      expect(connection.files['/container/path/subdir/nested.txt'].toString()).toBe(Buffer.from('nested content').toString());
     });
 
     it('should skip non-existent paths', async () => {

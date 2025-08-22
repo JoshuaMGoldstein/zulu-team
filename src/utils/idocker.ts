@@ -9,9 +9,10 @@ export interface IDocker {
      * Check if a file or directory exists in a container
      * @param containerName Name of the container
      * @param filePath Path to check within the container
+     * @param options Execution options including environment variables and working directory
      * @returns Promise resolving to boolean indicating existence
      */
-    fsExists(containerName: string, filePath: string): Promise<boolean>;
+    fsExists(containerName: string, filePath: string, options?:ExecOptions): Promise<boolean>;
 
     /**
      * Write content to a file in a container
@@ -19,18 +20,20 @@ export interface IDocker {
      * @param filePath Path to write within the container
      * @param content Content to write
      * @param mode Optional file permissions (e.g., 0o600)
+     * @param options Execution options including environment variables and working directory
      * @returns Promise resolving when write is complete
      */
-    fsWriteFile(containerName: string, filePath: string, content: string, mode?: number): Promise<void>;
+    fsWriteFile(containerName: string, filePath: string, content: string|Buffer, mode?: number, options?:ExecOptions): Promise<void>;
 
     /**
      * Change file permissions in a container
      * @param containerName Name of the container
      * @param filePath Path to file within the container
      * @param mode File permissions (e.g., 0o755)
+     * @param options Execution options including environment variables and working directory
      * @returns Promise resolving when chmod is complete
      */
-    fsChmod(containerName: string, filePath: string, mode: number): Promise<void>;
+    fsChmod(containerName: string, filePath: string, mode: number, options?:ExecOptions): Promise<void>;
 
     /**
      * Create and start a new container
@@ -129,7 +132,7 @@ export interface ExecOptions {
     /** Whether to capture stderr (default: true) */
     captureStderr?: boolean;
     /** Files to write to container before executing command (path: content pairs) */
-    files?: Record<string, string>;
+    files?: Record<string, string|Buffer>;
 }
 
 /**

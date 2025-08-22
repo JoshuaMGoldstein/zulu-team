@@ -25,10 +25,15 @@ const execPromise = (command: string): Promise<{ stdout: string; stderr: string 
  */
 export class LocalDocker implements IDocker {
     
-    async fsExists(containerName: string, filePath: string): Promise<boolean> {
+    async fsExists(containerName: string, filePath: string, options:ExecOptions): Promise<boolean> {
+        let userOption = "";
+        if (options?.user) {
+            userOption = '-u '+ options.user;
+        }
+
         try {
             log(`Checking if file exists: ${filePath} in container: ${containerName}`);
-            const command = `docker exec -i ${containerName} [ -e ${filePath} ] && echo exists || echo not found`;
+            const command = `docker exec -i ${userOption} ${containerName} [ -e ${filePath} ] && echo exists || echo not found`;
             log(`Executing command: ${command}`);
             const result = await execPromise(command);
             log(`Raw execPromise result: ${JSON.stringify(result)}`);
@@ -42,7 +47,7 @@ export class LocalDocker implements IDocker {
 
     
 
-    async fsWriteFile(containerName: string, filePath: string, content: string, mode?: number, options?:ExecOptions): Promise<void> {
+    async fsWriteFile(containerName: string, filePath: string, content: string|Buffer, mode?: number, options?:ExecOptions): Promise<void> {
         const tempFileName = `/tmp/${randomUUID()}`;
         const tempFilePath = path.join(process.cwd(), tempFileName); // Ensure absolute path for host
         
@@ -99,9 +104,15 @@ export class LocalDocker implements IDocker {
         }
     }
 
-    async fsChmod(containerName: string, filePath: string, mode: number): Promise<void> {
-        log(`Changing file permissions in container: ${containerName}, path: ${filePath}, mode: ${mode.toString(8)}`);
-        const command = `docker exec ${containerName} chmod ${mode.toString(8)} "${filePath}"`;
+    async fsChmod(containerName: string, filePath: string, mode: number, options:ExecOptions): Promise<void> {
+        log(`Changing file permissions in container: ${containerName}, path: ${filePath}, mode: ${mode.toString(8)}`);        
+
+        let userOption = "";
+        if (options?.user) {
+            userOption = '-u '+ options.user;
+        }
+
+        const command = `docker exec ${userOption} ${containerName} chmod ${mode.toString(8)} "${filePath}"`;
         log(`Executing command: ${command}`);
         await execPromise(command);
     }
@@ -148,16 +159,14 @@ export class LocalDocker implements IDocker {
         }
 
         if (options?.files) {
-            for (const [filePath, base64Content] of Object.entries(options.files)) {
-                // Decode base64 content before writing
-                const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8'); 
+            for (const [filePath, content] of Object.entries(options.files)) {                
                 const execOptions: ExecOptions = {
                     user: 'exec',
                     cwd: '/workspace',
                     stdin: false,
                 };
                 console.log(`calling fsWRitefile for containter ${containerName} with file: ${filePath}`);
-                await this.fsWriteFile(containerName, filePath, decodedContent, undefined, execOptions);
+                await this.fsWriteFile(containerName, filePath, content, undefined, execOptions);
             }
         }
 
@@ -183,10 +192,8 @@ export class LocalDocker implements IDocker {
         log(`Executing command in container ${containerName}: ${command}`);
         // Write files to container before executing command
         if (options?.files) {
-            for (const [filePath, base64Content] of Object.entries(options.files)) {
-                // Decode base64 content before writing
-                const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8');                
-                await this.fsWriteFile(containerName, filePath, decodedContent, undefined, options);
+            for (const [filePath, content] of Object.entries(options.files)) {                
+                await this.fsWriteFile(containerName, filePath, content, undefined, options);
             }
         }
 
@@ -263,10 +270,8 @@ export class LocalDocker implements IDocker {
         log(`Spawning command in container ${containerName}: ${command}`);
 
         if (options?.files) {
-            for (const [filePath, base64Content] of Object.entries(options.files)) {
-                // Decode base64 content before writing
-                const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8');                
-                await this.fsWriteFile(containerName, filePath, decodedContent, undefined, options);
+            for (const [filePath, content] of Object.entries(options.files)) {                                
+                await this.fsWriteFile(containerName, filePath, content, undefined, options);
             }
         }
 

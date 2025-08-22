@@ -80,11 +80,11 @@ class ConfigManager {
         let files:Record<string,string>={};
         try {
             if(instance.cli == 'gemini') {
-                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('base64');
-                files['/workspace/GEMINI.md'] = fs.readFileSync(`${volumePath}/GEMINI.md`).toString('base64');
+                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('utf8');
+                files['/workspace/GEMINI.md'] = fs.readFileSync(`${volumePath}/GEMINI.md`).toString('utf8');
             } else if(instance.cli == 'claude') {
-                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('base64');
-                files['/workspace/CLAUDE.md'] = fs.readFileSync(`${volumePath}/CLAUDE.md`).toString('base64');
+                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('utf8');
+                files['/workspace/CLAUDE.md'] = fs.readFileSync(`${volumePath}/CLAUDE.md`).toString('utf8');
             }
         } catch(e) {
             log(`Error generating Files for instance ${instance.id}`);

@@ -30,17 +30,55 @@ export class WorkflowManager {
   }
 
   /**
-   * Parse a workflow file into steps
+   * Process workflow content to handle line continuations with backslash
+   */
+  private processMultilineContent(content: string): string[] {
+    const lines = content.split('\n');
+    const processedLines: string[] = [];
+    let currentLine = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmedLine = line.trim();
+      
+      // Skip empty lines and comments
+      if (!trimmedLine || trimmedLine.startsWith('#')) {
+        if (currentLine) {
+          processedLines.push(currentLine.trim());
+          currentLine = '';
+        }
+        continue;
+      }
+      
+      // Check for line continuation with backslash
+      if (line.endsWith('\\')) {
+        // Remove the backslash and add to current line
+        currentLine += line.slice(0, -1) + ' ';
+      } else {
+        // End of current line
+        currentLine += line;
+        processedLines.push(currentLine.trim());
+        currentLine = '';
+      }
+    }
+    
+    // Handle any remaining line
+    if (currentLine.trim()) {
+      processedLines.push(currentLine.trim());
+    }
+    
+    return processedLines;
+  }
+
+  /**
+   * Parse a workflow file into steps with multiline support
    */
   private parseWorkflow(content: string): WorkflowStep[] {
-    const lines = content.split('\n');
+    const processedLines = this.processMultilineContent(content);
     const steps: WorkflowStep[] = [];
     
-    for (const line of lines) {
+    for (const line of processedLines) {
       const trimmedLine = line.trim();
-      if (!trimmedLine || trimmedLine.startsWith('#')) {
-        continue; // Skip empty lines and comments
-      }
       
       // Skip FROM directive as it's handled separately
       if (trimmedLine.toUpperCase().startsWith('FROM ')) {

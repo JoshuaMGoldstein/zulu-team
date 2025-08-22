@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-const logFile = path.join(__dirname, 'test.log');
+const logFile = path.join(__dirname, 'exec.log');
 function log(message, level = 'INFO') {
     const timestamp = new Date().toISOString();
     const logMessage = `[${timestamp}] [${level}] ${message}`;
@@ -16,10 +16,36 @@ function log(message, level = 'INFO') {
 // Parse command line arguments
 const args = process.argv.slice(2);
 let model = 'kimi-k2-turbo-preview'; // Default model
+let commandToExecute = null;
+let user = 'exec'; // Default user
+
+// Display help if no arguments or --help is provided
+if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    console.log(`
+Usage: node exec.js [options]
+
+Options:
+  --model <model>     Specify the model to use (default: kimi-k2-turbo-preview)
+  --exec <command>    Command to execute in the container
+  --user <user>       User to run the command as (default: exec)
+  --help, -h          Show this help message
+
+Examples:
+  node exec.js --exec "ls -la /workspace"
+  node exec.js --exec "whoami" --user git
+    `);
+    process.exit(0);
+}
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--model' && i + 1 < args.length) {
         model = args[i + 1];
+        i++; // Skip next argument
+    } else if (args[i] === '--exec' && i + 1 < args.length) {
+        commandToExecute = args[i + 1];
+        i++; // Skip next argument
+    } else if (args[i] === '--user' && i + 1 < args.length) {
+        user = args[i + 1];
         i++; // Skip next argument
     }
 }
@@ -31,13 +57,13 @@ const config = {
     branch: process.env.GIT_BRANCH,
     sshKeyBase64: process.env.GIT_SSHKEY_BASE64,
     projectName: process.env.PROJECT_NAME,
-    execCommand: process.env.EXEC_COMMAND ? process.env.EXEC_COMMAND.replace('kimi-k2-turbo-preview', model) : `cd /workspace/test-project && gemini --model '${model}' --yolo --prompt 'please create or update count.txt in the /workspace/test-project/ git repository and commit it with the message: updated count!'`,
+    execCommand: commandToExecute || `echo "Container is ready for commands"`,
     openaiBaseUrl: process.env.OPENAI_BASE_URL,
     openaiApiKey: process.env.OPENAI_API_KEY
 };
 
 function validateConfig() {
-    const required = ['endpoint', 'repoUrl', 'branch', 'sshKeyBase64', 'projectName', 'execCommand', 'openaiBaseUrl', 'openaiApiKey'];
+    const required = ['endpoint', 'exec_token', 'openaiBaseUrl', 'openaiApiKey'];
     const missing = required.filter(key => !config[key]);
     if (missing.length > 0) throw new Error(`Missing: ${missing.join(', ')}`);
     log('Config validated');
@@ -74,7 +100,7 @@ function connectWebSocket(clientId, token) {
 
 function executeCommand(ws, command, user, env = {}, files = {}, cwd = '/workspace') {
     return new Promise((resolve, reject) => {
-        const message = { type: 'exec', command, user, env, files };
+        const message = { type: 'exec', command, user, env, files, cwd };
         let output = '';
         let exitCode = null;
         
@@ -106,59 +132,45 @@ function executeCommand(ws, command, user, env = {}, files = {}, cwd = '/workspa
     });
 }
 
-async function runTest() {
+async function runExec() {
     try {
         validateConfig();
         const token = config.exec_token;
-        const projectPath = `/workspace/${config.projectName}`;
         
         // Single WebSocket connection for all commands
         log('Establishing single WebSocket connection...');
-        const ws = await connectWebSocket('test-' + Date.now(), token);
-        const gitFiles = { '~/.ssh/id_rsa': config.sshKeyBase64 };
+        const ws = await connectWebSocket('exec-' + Date.now(), token);
         
-        // Git clone and checkout
-        log('Step 1: Git clone and checkout...');
-        await executeCommand(ws, `cd /workspace && touch /workspace/test`, 'git', {}, gitFiles);
-        await executeCommand(ws, `git clone ${config.repoUrl} ${projectPath}`, 'git', {}, gitFiles);
-        await executeCommand(ws, `cd ${projectPath} && git fetch && git checkout -b ${config.branch} origin/${config.branch} && git pull`, 'git', {}, gitFiles);
-
-        await executeCommand(ws, `chmod -R g+srwx ${projectPath}`, 'git', {}, gitFiles, projectPath);
-        await executeCommand(ws, `ls -la ${projectPath}`, 'git', {}, gitFiles, projectPath);
-
-        log('Git clone and checkout completed');
-
+        log('Container is ready for commands');
         
-        
-        // Exec command
-        log('Step 2: Exec command...');
+        // Execute the provided command or default command
+        log('Executing command...');
         const execEnv = { 
             OPENAI_BASE_URL: config.openaiBaseUrl, 
             OPENAI_API_KEY: config.openaiApiKey,
-            GEMINI_API_KEY: config.openaiApiKey,  // Use the provided API key
-            //HOME: '/home/exec',
-            //XDG_CONFIG_HOME: '/home/exec/.config'  // Redirect config directory
+            GEMINI_API_KEY: config.openaiApiKey
         };
-        await executeCommand(ws, config.execCommand, 'exec', execEnv);
-        log('Exec command completed');
+        await executeCommand(ws, config.execCommand, user, execEnv);
+        log('Command execution completed');
         
-        // Verify file creation and commit
-        log('Verifying file creation and commit...');
-        await executeCommand(ws, `ls -la ${projectPath}`, 'git', {}, gitFiles, projectPath);
-        await executeCommand(ws, `cd ${projectPath} && git log --oneline -3`, 'git', {}, gitFiles);
-        await executeCommand(ws, `cd ${projectPath} && git status`, 'git', {}, gitFiles);
+        // Keep the connection open for interactive use
+        log('Container is ready. You can now run additional commands.');
+        log('Press Ctrl+C to exit.');
         
-        // Git push
-        log('Step 3: Git push...');
-        await executeCommand(ws, `cd ${projectPath} && git push -u origin ${config.branch}`, 'git', {}, gitFiles);
-        log('Git push completed');
+        // Keep the process running
+        process.stdin.resume();
         
-        ws.close();
-        log('Test completed successfully');
+        // Handle Ctrl+C
+        process.on('SIGINT', () => {
+            log('Closing WebSocket connection...');
+            ws.close();
+            process.exit(0);
+        });
+        
     } catch (error) {
-        log(`Test failed: ${error.message}`, 'ERROR');
+        log(`Execution failed: ${error.message}`, 'ERROR');
         process.exit(1);
     }
 }
 
-if (require.main === module) runTest();
+if (require.main === module) runExec();

@@ -9,6 +9,7 @@ const os = require('os');
 
 const app = express();
 const server = http.createServer(app);
+
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
@@ -70,6 +71,12 @@ function resetIdleTimeout() {
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
         exec('rm -rf /var/tmp/*');
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');    
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
         //FIXME: GET MORE ANGRY ABOUT SECURITY AND ROTATE USERIDS
 
         /*exec('kill 1', (error) => {
@@ -417,7 +424,10 @@ wss.on('connection', (ws, req) => {
         console.log('WebSocket closed, rebooting container');
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
-        exec('rm -rf /var/tmp/*');
+        exec('rm -rf /var/tmp/*');    
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
         /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
@@ -442,7 +452,10 @@ wss.on('connection', (ws, req) => {
         console.log('WebSocket error, rebooting container');
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
-        exec('rm -rf /var/tmp/*');
+        exec('rm -rf /var/tmp/*');    
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
         /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);

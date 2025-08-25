@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { WorkflowManager, WorkflowContext } from '../src/workflowmanager';
 import { IDocker } from '../src/utils/idocker';
+import * as fs from 'fs'
 
 // Mock IDocker implementation
 const mockDocker: IDocker = {
@@ -75,10 +76,10 @@ describe('WorkflowManager', () => {
     const mockWorkflowContent = 'FROM install-git-key\nARG TEST_ARG\nRUN echo "test"';
     
     // Mock file system read to return our test content
-    const originalReadFileSync = require('fs').readFileSync;
-    const mockReadFileSync = vi.spyOn(require('fs'), 'readFileSync');
-    mockReadFileSync.mockImplementation((path: string) => {
-      if (path.includes('test-workflow.workflow')) {
+    const originalReadFileSync = fs.readFileSync;
+    const mockReadFileSync = vi.spyOn(fs, 'readFileSync');
+    mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+      if (path.toString().includes('test-workflow.workflow')) {
         return mockWorkflowContent;
       }
       return originalReadFileSync(path);

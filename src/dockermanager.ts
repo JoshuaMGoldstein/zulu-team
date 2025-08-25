@@ -16,6 +16,7 @@ import { IChildProcess, IDocker, RunOptions,ExecOptions,ExecResult } from './uti
 import { LocalDocker } from './utils/localdocker';
 import { WSDocker } from './utils/wsdocker';
 import configmanager from './configmanager';
+import workflowManager from './workflowmanager';
 
 dotenv.config();
 
@@ -31,7 +32,6 @@ export type StoredPromise = {
     child: IChildProcess;
     
 };
-
 
 
 class DockerManager {
@@ -151,7 +151,6 @@ class DockerManager {
             env: instance.env //This might not needed anymore because exec passes it, but i think we use it to verify the container //{ LLMPROVIDER: provider } 
         };
         
-
         try {
             await this.docker.run(containerName, imageName, runOptions);
             log(`Container ${containerName} started successfully.`);
@@ -195,7 +194,7 @@ class DockerManager {
 
             let fullResponse = '';
             const stdoutListener = (data: Buffer) => {
-                console.log("[NEXT-STDOUT]:"+data);
+                //console.log("[NEXT-STDOUT]:"+data);
                 const output = data.toString();
                 fullResponse += output;
                 //if (statusMessage) {
@@ -252,9 +251,6 @@ class DockerManager {
         const containerName = `zulu-instance-${instance.id}`;
         const projectPath = `/workspace/${project.name}`;
 
-        const env = instance.env; // { [key: string]: string } = { /*EVENT_ID: event.id,*/ INSTANCE_ID: instance.id, API_URL: getApiUrl() };
-
-
         try {
             const exists = await this.docker.fsExists(containerName, `${projectPath}/.git`);
             if (exists) {
@@ -269,38 +265,9 @@ class DockerManager {
 
         log(`Cloning project ${project.name} for instance ${instance.id}`);
 
-        const gitKeys = configManager.getGitKeys();
-        const key = gitKeys.find((k: any) => k.id === project.gitKeyId);
-        if (!key) {
-            log(`Git key not found for project ${project.name}`);
-            return;
-        }
-
-        let gitExecOptions:ExecOptions = {
-            user: 'git',
-            env: env,
-            cwd: '/workspace',
-            stdin: true
-        }                   
-        gitExecOptions.files = {};
-        gitExecOptions.files['~/.ssh/'+key.id] = key.privateKey;
-
-        const keyPath = `~/.ssh/${key.id}`;
-        const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no`;
-        const repoUrl = project.repositoryUrl.replace('https://github.com/', 'git@github.com:');
-
-        // Using a heredoc for the shell script to be executed in the container
-        const cloneScript = `
-set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
-`;
-
-        const command = `${cloneScript.replace(/"/g, '\"')}`;
-        log(`Running clone command: docker exec -i ${containerName} ${command}`);
-
         try {
-            const { stdout, stderr } = await this.docker.exec(containerName, command, gitExecOptions);
-            log(`Clone stdout: ${stdout}`);
-            if (stderr) log(`Clone stderr: ${stderr}`);
+            const context = workflowManager.buildGitContext(this.docker, containerName, project);
+            await workflowManager.executeWorkflow('clone-project', context);
             log(`Project ${project.name} cloned successfully into ${containerName}:${projectPath}.`);
         } catch (error) {
             log(`Error cloning project ${project.name} into ${containerName}:`, error);
@@ -312,12 +279,6 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
         Object.assign(env,instance.env);
         env.EVENT_ID = event.id; 
 
-        let gitExecOptions:ExecOptions = {
-            user: 'git',
-            env: env,
-            cwd: '/workspace',
-            stdin: true,
-        }
         // Existing activation logic (cloning and container exec)
         if (event instanceof DelegationBotEvent) {
             const project = configManager.getProjects().find(p => p.name === event.project);
@@ -326,28 +287,9 @@ set -e && GIT_SSH_COMMAND="${sshCommand}" git clone ${repoUrl} ${projectPath}
                 // Checkout specified branch if provided
                 if (event.branch) {
                     const containerName = `zulu-instance-${instance.id}`;
-                    const projectPath = `/workspace/${project.name}`;
                     try {
-                        // Ensure project directory exists before checkout
-                        await this.docker.exec(containerName, `bash -c "test -d ${projectPath} || exit 1"`,gitExecOptions);
-                        
-                        // Create branch if it doesn't exist, then checkout
-                        const branchScript = `
-set -e
-cd ${projectPath}
-# Try to fetch from origin, but don't fail if it fails
-git fetch origin 2>/dev/null || true
-if git show-ref --verify --quiet refs/heads/${event.branch}; then
-    git checkout ${event.branch}
-elif git ls-remote --heads origin ${event.branch} 2>/dev/null | grep -q ${event.branch}; then
-    # Branch exists on remote, create local tracking branch
-    git checkout -b ${event.branch} origin/${event.branch}
-else
-    # Branch doesn't exist locally or remotely, create new branch
-    git checkout -b ${event.branch}
-fi
-`;
-                        await this.docker.exec(containerName, `bash -c "${branchScript}"`);
+                        const context = workflowManager.buildGitContext(this.docker, containerName, project, event.branch);
+                        await workflowManager.executeWorkflow('set-branch', context);
                         log(`Checked out branch ${event.branch} for project ${project.name}`);
                     } catch (err) {
                         log(`Failed to checkout branch ${event.branch} for project ${project.name}:`, err);
@@ -387,7 +329,7 @@ fi
             } else {
                 // openrouter
                 const preset = instance.preset === 'auto' ? '' : `@preset/${instance.preset}`;
-                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}${preset}"a --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
+                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}${preset}" --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
             }
         } else {
             cliCommand = `cd /workspace && claude --dangerously-skip-permissions --continue --model ${instance.model}`;
@@ -439,7 +381,7 @@ fi
                 reject(err);
             };
             const stdoutListener = (data: Buffer) => {
-                console.log("[STDOUT]:"+data);
+                //console.log("[STDOUT]:"+data);
                 //Remove the close/error event handlers since createNextEventPromise will handle it from here on out.
                 cleanup();
                 resolve({

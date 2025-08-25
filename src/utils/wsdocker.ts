@@ -76,12 +76,15 @@ export class WSDockerProcess implements IChildProcess {
     }
 
     emit(eventName: string, ...args: any[]) {
-        console.log(`Emitting event: ${eventName} with args: ${args}`)
+        //console.log(`Emitting event: ${eventName} with args: ${args}`)
         // Emit regular listeners
         if (this.eventListeners.has(eventName)) {
             // Create a copy to prevent issues if listeners modify the set during iteration
             const listeners = new Set(this.eventListeners.get(eventName)!);
-            listeners.forEach(listener => { console.log(`Calling eventlistener for event ${eventName}`); listener(...args) });
+            listeners.forEach(listener => { 
+                //console.log(`Calling eventlistener for event ${eventName}`); 
+                listener(...args) 
+            });
         }
         // Emit once listeners and then clear them
         if (this.onceEventListeners.has(eventName)) {
@@ -89,7 +92,7 @@ export class WSDockerProcess implements IChildProcess {
             const onceListeners = new Set(this.onceEventListeners.get(eventName)!);
             onceListeners.forEach(listener => { 
                 this.onceEventListeners.get(eventName)?.delete(listener);
-                console.log(`Calling oncelistener for event ${eventName}`); 
+                //console.log(`Calling oncelistener for event ${eventName}`); 
                 listener(...args) 
             });            
         }
@@ -154,7 +157,7 @@ export class WSDocker implements IDocker {
             });
 
             ws.on('message', (data) => {
-                log(`WSDocker: Message recieved for container ${containerName} (${imageName}): `+data);
+                //log(`WSDocker: Message recieved for container ${containerName} (${imageName}): `+data);
                 try {
                     const response = JSON.parse(data.toString());
                     const childProcess = this.childProcesses.get(response.pid);
@@ -397,7 +400,7 @@ export class WSDocker implements IDocker {
                 this.childProcesses.delete(message.pid);
             });
 
-            console.log(`Sending message for container  ${containerName}: ${JSON.stringify(message)}`)
+            //console.log(`Sending message for container  ${containerName}: ${JSON.stringify(message)}`)
             connection.ws.send(JSON.stringify(message));
         });
     }

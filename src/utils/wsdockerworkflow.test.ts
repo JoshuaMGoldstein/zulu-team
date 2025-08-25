@@ -83,7 +83,7 @@ describe('WorkflowManager with WSDocker', () => {
       const testProject = projects.find((p: any) => p.name === 'test');
       
       // Use SSH URL instead of HTTPS for proper SSH key authentication
-      const sshRepoUrl = testProject.repositoryUrl.replace('https://github.com/', 'git@github.com:');
+      const sshRepoUrl = testProject.repositoryUrl;
       
       const context = {
         containerName: 'test-container',
@@ -126,7 +126,7 @@ describe('WorkflowManager with WSDocker', () => {
       const decodedPrivateKey = Buffer.from(sshKey.privateKey, 'base64').toString('utf-8');
       
       // Use SSH URL instead of HTTPS for proper SSH key authentication
-      const sshRepoUrl = testProject.repositoryUrl.replace('https://github.com/', 'git@github.com:');
+      const sshRepoUrl = testProject.repositoryUrl;
       
       const context = {
         containerName: 'test-container',

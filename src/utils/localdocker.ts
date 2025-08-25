@@ -25,7 +25,7 @@ const execPromise = (command: string): Promise<{ stdout: string; stderr: string 
  */
 export class LocalDocker implements IDocker {
     
-    async fsExists(containerName: string, filePath: string, options:ExecOptions): Promise<boolean> {
+    async fsExists(containerName: string, filePath: string, options?:ExecOptions): Promise<boolean> {
         let userOption = "";
         if (options?.user) {
             userOption = '-u '+ options.user;
@@ -104,7 +104,7 @@ export class LocalDocker implements IDocker {
         }
     }
 
-    async fsChmod(containerName: string, filePath: string, mode: number, options:ExecOptions): Promise<void> {
+    async fsChmod(containerName: string, filePath: string, mode: number, options?:ExecOptions): Promise<void> {
         log(`Changing file permissions in container: ${containerName}, path: ${filePath}, mode: ${mode.toString(8)}`);        
 
         let userOption = "";

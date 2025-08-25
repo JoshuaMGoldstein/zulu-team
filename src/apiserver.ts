@@ -384,9 +384,9 @@ class ApiServer {
             const hookData:GeminiToolCall = req.body;            
 
             if (instanceId && eventId) {
-                log(`Received tool call for ${instanceId} (Event ID: ${eventId})`);                
+                //log(`Received tool call for ${instanceId} (Event ID: ${eventId})`);                
                 if(hookData.toolCall && hookData.toolCall.name && hookData.toolCall.args) {
-                    log(` - tool: ${hookData.toolCall.name} | args: ${JSON.stringify(hookData.toolCall.args)}`);
+                    //log(` - tool: ${hookData.toolCall.name} | args: ${JSON.stringify(hookData.toolCall.args)}`);
                 }
 
                 dockerManager.handleToolCall(instanceId, eventId, hookData);

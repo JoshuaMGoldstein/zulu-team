@@ -30,6 +30,45 @@ export class WorkflowManager {
   }
 
   /**
+   * Build a context for Git-based workflows with all necessary arguments and files
+   */
+  public buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string): WorkflowContext {
+    const gitKeysPath = path.join(__dirname, '../bot-instances/gitkeys.json');
+    const gitKeys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
+    const sshKey = gitKeys.find((key: any) => key.id === project.gitKeyId) || gitKeys[0];
+    
+    // Decode the base64 encoded private key
+    const decodedPrivateKey = Buffer.from(sshKey.privateKey, 'base64').toString('utf-8');
+    
+    const args: Record<string, string> = {
+      REPO_URL: project.repositoryUrl,
+      PROJECT_NAME: project.name,
+      SSH_KEY_PATH: sshKey.id,
+      KEY_FILENAME: sshKey.id,
+      ACCOUNT_ID: project.accountId || 'default',
+      PROJECT_ID: project.name
+    };
+    
+    if (branch) {
+      args.BRANCH_NAME = branch;
+    }
+    
+    return {
+      containerName,
+      docker,
+      args,
+      files: {
+        [sshKey.id]: decodedPrivateKey
+      },
+      env: {
+        GIT_SSH_COMMAND: 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      },
+      user: 'git',
+      workdir: '/workspace'
+    };
+  }
+
+  /**
    * Process workflow content to handle line continuations with backslash
    */
   private processMultilineContent(content: string): string[] {

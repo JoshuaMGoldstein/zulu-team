@@ -233,6 +233,7 @@ class ApiServer {
             }
 
             if (statusMessage && (verbosity & Verbosity.STDOUT)) {
+                console.log(targetInstance.id +"> "+fullResponse);
                 await sendChunkedMessage(statusMessage, fullResponse);
             }                    
     
@@ -378,8 +379,8 @@ class ApiServer {
 
         this.app.post('/hook/:hookType', (req, res) => {
             const instanceId = req.header('X-Instance-Id');
-            const eventId = req.header('X-Event-Id');
-            
+            const eventId = req.header('X-Event-Id');        
+
             //Fixme: Support both Gemini and Claude tool call format. Maybe a diff endpoint is easiest?        
             const hookData:GeminiToolCall = req.body;            
 
@@ -432,7 +433,7 @@ class ApiServer {
             
             //Find the comms Event specified by X-Event-ID
             //The problem is that the activateBot() on zulu-manager occurs with the X-Event-Id of the delegation event, so its not actually a comms even that he finds...
-            let openEvent = dockermanager.getOpenEventByInstanceAndEventId(delegatorId, originalEventId);
+            let openEvent = dockermanager.getOpenPromise(delegatorId, originalEventId)?.eventInfo;
             let commsEvent = null;
             if(!openEvent) {
                 res.status(400).send('Open Event Id not found: '+originalEventId);

@@ -30,7 +30,6 @@ export type StoredPromise = {
     logs: BotOutput[];
     eventInfo: BotEvent;
     child: IChildProcess;
-    
 };
 
 
@@ -43,19 +42,11 @@ class DockerManager {
         this.docker = docker;
     }
 
-    public getOpenEventByInstanceAndEventId(instanceId:string, eventId:string):BotEvent|undefined {
-        const instancePromises = this.openPromises.get(instanceId);
-        if (instancePromises && instancePromises.has(eventId)) {
-            let openPromise = instancePromises.get(eventId);            
-            if(openPromise) {
-                return openPromise.eventInfo;
-            } else {
-                return undefined;
-            }
-        } else {
-            return undefined;
-        }
+    public getOpenPromise(instanceId:string,eventId:string):StoredPromise|undefined {
+        const storedPromise = this.openPromises.get(instanceId)?.get(eventId);
+        return storedPromise;
     }
+
 
     private async getRunningContainers(): Promise<Map<string, string>> {
         const containerMap = new Map<string, string>();
@@ -172,78 +163,26 @@ class DockerManager {
     }
 
     public handleToolCall(instanceId: string, eventId: string, toolCallData: GeminiToolCall) {
-        const instancePromises = this.openPromises.get(instanceId);
-        if (instancePromises && instancePromises.has(eventId)) {
-            const storedPromise = instancePromises.get(eventId);
-            if (storedPromise) {
-                storedPromise.resolver.resolve({
-                    type: BotEventType.TOOLCALL,
-                    output: toolCallData,
-                    next: this.createNextEventPromise(storedPromise.child, instanceId, eventId),
-                });
-            }
-        }
+        const storedPromise = this.getOpenPromise(instanceId, eventId);    
+        if(!storedPromise) return;        
+                
+        const openEvent:BotEvent|undefined = storedPromise.eventInfo;
+        storedPromise.resolver.resolve({
+            type: BotEventType.TOOLCALL,
+            output: toolCallData,
+            next: this.createNextEventPromise(storedPromise.child, instanceId, openEvent.id),
+        });
+
     }
 
-    private createNextEventPromise(child: IChildProcess, instanceId: string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
+    private createNextEventPromise(child: IChildProcess, instanceId:string, eventId: string, statusMessage?: Message): Promise<BotOutput> {
         return new Promise((resolve, reject) => {
             const storedPromise = this.openPromises.get(instanceId)?.get(eventId);
             if (storedPromise) {
                 storedPromise.resolver = { resolve, reject };
             }
 
-            let fullResponse = '';
-            const stdoutListener = (data: Buffer) => {
-                //console.log("[NEXT-STDOUT]:"+data);
-                const output = data.toString();
-                fullResponse += output;
-                //if (statusMessage) {
-                //    sendChunkedMessage(statusMessage, fullResponse);
-                //}
-                cleanup();
-                resolve({
-                    type: BotEventType.STDOUT,
-                    output: output,
-                    next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
-                });
-            };
-
-            const stderrListener = (data: Buffer) => {
-                cleanup();
-                resolve({
-                    type: BotEventType.STDERR,
-                    output: data.toString(),
-                    next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
-                });
-            };
-
-            const closeListener = (code: number) => {
-                cleanup();
-                this.openPromises.get(instanceId)?.delete(eventId);
-                resolve({
-                    type: BotEventType.CLOSE,
-                    output: `Process exited with code ${code}`,
-                });
-            };
-
-            const errorListener = (err: Error) => {
-                cleanup();
-                this.openPromises.get(instanceId)?.delete(eventId);
-                reject(err);
-            };
-
-
-            const cleanup = () => {
-                child.stdout?.removeListener('data', stdoutListener);
-                child.stderr?.removeListener('data', stderrListener);
-                child.removeListener('close', closeListener);
-                child.removeListener('error', errorListener);
-            };
-
-            child.stdout?.once('data', stdoutListener);
-            child.stderr?.once('data', stderrListener);
-            child.once('close', closeListener);
-            child.once('error', errorListener);
+            this.createEventListeners(child, instanceId, eventId, resolve, reject, statusMessage);            
         });
     }
 
@@ -273,6 +212,8 @@ class DockerManager {
             log(`Error cloning project ${project.name} into ${containerName}:`, error);
         }
     }
+
+
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
         const env:Record<string,string> = {}; 
@@ -356,57 +297,8 @@ class DockerManager {
                 eventInfo: event,
                 child: child
             });
-
-
-           const cleanup = () => {
-                child.removeListener('close', closeListener);
-                child.removeListener('error', errorListener);
-                child.stdout?.removeListener('data', stdoutListener);
-                child.stderr?.removeListener('data', stderrListener);
-            };
-
-            const closeListener = (code: number) => {
-                cleanup();
-                log("[CLOSE]:"+code);
-                this.openPromises.get(instance.id)?.delete(event.id);
-                resolve({
-                    type: BotEventType.CLOSE,
-                    output: `Process exited with code ${code}`,
-                });
-            };
-            const errorListener = (err: Error) => {
-                cleanup();
-                log("[ERROR]:"+err);
-                this.openPromises.get(instance.id)?.delete(event.id);
-                reject(err);
-            };
-            const stdoutListener = (data: Buffer) => {
-                //console.log("[STDOUT]:"+data);
-                //Remove the close/error event handlers since createNextEventPromise will handle it from here on out.
-                cleanup();
-                resolve({
-                    type: BotEventType.STDOUT,
-                    output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
-                });
-            }
-            const stderrListener = (data: Buffer) => {
-                console.log("[STDERR]:"+data);
-                cleanup();
-                resolve({
-                    type: BotEventType.STDERR,
-                    output: data.toString(),
-                    next: this.createNextEventPromise(child, instance.id, event.id, statusMessage),
-                });
-            }
-
-        
-
-            child.once('close', closeListener);
-            child.once('error', errorListener);        
-            child.stdout?.once('data', stdoutListener);
-            child.stderr?.once('data', stderrListener);
-
+            
+            this.createEventListeners(child, instance.id, event.id, resolve, reject, statusMessage);
         });
     }
 
@@ -425,7 +317,52 @@ class DockerManager {
         return queued;
     }
 
+    private createEventListeners(child:IChildProcess, instanceId:string, eventId:string, resolve:(value: BotOutput | PromiseLike<BotOutput>) => void, reject:(reason?:any)=>void, statusMessage?: Message) {
+        const cleanup = () => {
+            child.removeListener('close', closeListener);
+            child.removeListener('error', errorListener);
+            child.stdout?.removeListener('data', stdoutListener);
+            child.stderr?.removeListener('data', stderrListener);
+        };
 
+        const closeListener = (code: number) => {
+            cleanup();
+            log("[CLOSE]:"+code);
+            this.openPromises.get(instanceId)?.delete(eventId);
+            resolve({
+                type: BotEventType.CLOSE,
+                output: `Process exited with code ${code}`,
+            });
+        };
+        const errorListener = (err: Error) => {
+            cleanup();
+            log("[ERROR]:"+err);
+            this.openPromises.get(instanceId)?.delete(eventId);
+            reject(err);
+        };
+        const stdoutListener = (data: Buffer) => {
+            cleanup();
+            resolve({
+                type: BotEventType.STDOUT,
+                output: data.toString(),
+                next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
+            });
+        }
+        const stderrListener = (data: Buffer) => {
+            console.log("[STDERR]:"+data);
+            cleanup();
+            resolve({
+                type: BotEventType.STDERR,
+                output: data.toString(),
+                next: this.createNextEventPromise(child, instanceId, eventId, statusMessage),
+            });
+        }
+
+        child.once('close', closeListener);
+        child.once('error', errorListener);        
+        child.stdout?.once('data', stdoutListener);
+        child.stderr?.once('data', stderrListener);
+    }
 }
 
 export default new DockerManager(new WSDocker());

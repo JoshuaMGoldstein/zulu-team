@@ -19,5 +19,5 @@
   "options": {
     "defaultLogsBucketBehavior": "REGIONAL_USER_OWNED_BUCKET"
   },
-  "images": "us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest"
+  "images": "us-east4-docker.pkg.dev/zulu-team/zulu-team/build-server:latest"
 }

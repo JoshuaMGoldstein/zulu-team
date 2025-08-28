@@ -59,7 +59,21 @@ export enum BotStatus {
 }
 
 
+
+/*
+import {Database} from '../db/public.types'
+export type Bot_Instance = Database['public']['Tables']['bot_instances']['Row'];
+export type Bot = Bot_Instance & { 
+    //Runtime settings (currently generated in dockermanager.ts, but maybe should be moved to templatemanager.ts)
+    files:Record<string,string>;
+    env: Record<string,string>;
+}
+*/
 export interface Bot {
+    account_id:string //added for multi-tenant
+
+    bot_id:string;
+    
     id: string; //instance-id
     name:string;
     role: BotRole;
@@ -67,8 +81,8 @@ export interface Bot {
     enabled: boolean;
     model: string; // "auto" or any model id
     preset: string; // "auto" or preset name
-    discordBotToken: string;
-    discordChannelId: string | string[];
+    //discordBotToken: string;
+    //discordChannelId: string | string[];
     settings: BotSettings;
     status:BotStatus;
     workingDirectory:string;
@@ -88,8 +102,6 @@ export enum Verbosity {
 }
 
 export interface BotSettings {
-    name: string;
-    description: string;
     dmVerbosity:Verbosity
     channelVerbosity:Verbosity
     delegatedVerbosity:Verbosity
@@ -103,11 +115,13 @@ enum BotEventSource {
 }
 
 export class BotEvent {
-    constructor(id:string, source:BotEventSource) {
-        this.source=source;
+    constructor(id:string, account_id:string, source:BotEventSource) {
         this.id=id;                
-    }
+        this.account_id=account_id;
+        this.source=source;                
+    }    
     public id:string; //snowflake
+    public account_id:string;  //account relating to this event (for multi-tenant flows)
     public source: BotEventSource;
     public getTimestamp() {
         return getTimestampFromSnowflakeId(this.id);
@@ -127,19 +141,20 @@ export class BotEvent {
 
 //A generic event which is the superclass of event Comms Events such as Discord, Email, Slack, etc.
 export class CommsEvent extends BotEvent {
-    constructor(id:string, source:BotEventSource ) {
-        super(id, source);                
+    constructor(id:string, account_id:string, source:BotEventSource ) {
+        super(id, account_id, source);                
     }
 }
 
 export class DiscordBotEvent extends CommsEvent {
-    constructor(e:{id:string, message:Message, channelProjects: string[]}) {
-        super(e.id, BotEventSource.DISCORD);                
+    constructor(e:{id:string, account_id:string, message:Message, channelProjects: string[]}) {
+        super(e.id, e.account_id, BotEventSource.DISCORD);                
         this.message=e.message;
         this.channelProjects = e.channelProjects;
     }
     public getSummary():string {
         return JSON.stringify({
+            account_id: this.account_id,
             id: this.id,
             timestamp:this.getDateISOString(),
             source:this.source,
@@ -154,8 +169,8 @@ export class DiscordBotEvent extends CommsEvent {
 }
 
 export class DelegationBotEvent extends BotEvent {
-    constructor(e:{id:string, project:string, task_description:string, notes:string, data:any, delegator_botid:string,assignedTo:string, commsEvent: BotEvent, attempts?: number, branch?: string, changedFiles?: string[]}) {
-        super(e.id, BotEventSource.DELEGATION);
+    constructor(e:{id:string, account_id:string, project:string, task_description:string, notes:string, data:any, delegator_botid:string,assignedTo:string, commsEvent: BotEvent, attempts?: number, branch?: string, changedFiles?: string[]}) {
+        super(e.id, e.account_id, BotEventSource.DELEGATION);
         this.project=e.project;
         this.task_description=e.task_description;
         this.notes=e.notes;
@@ -188,6 +203,8 @@ export class DelegationBotEvent extends BotEvent {
 }
 
 export interface Project {
+    account_id:string, //added for multi-tenant
+
     id:string,
     name:string
     description:string,

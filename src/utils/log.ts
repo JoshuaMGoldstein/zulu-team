@@ -21,8 +21,29 @@ export const log = (...args: any[]) => {
     const logMessage = `[${timestamp}] ${message}\n`;
 
     // Log to console
-    console.log(...args);
 
+    const error = new Error();
+    // The stack trace will vary slightly between environments,
+    // but typically the third line (index 2) contains the caller's info.
+    const stackLines = error.stack?.split('\n')??[];
+    let callerInfo = '';
+
+    if (stackLines.length > 2) {
+        // Attempt to extract the file and line number from the stack trace
+        // This might need adjustment based on your specific Node.js version and environment
+        const match = stackLines[2].match(/\((.*):(\d+):(\d+)\)/) || stackLines[2].match(/at (.*):(\d+):(\d+)/);
+        if (match) {
+        const filePath = match[1];
+        const fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+        const lineNumber = match[2];
+        callerInfo = `(${fileName}:${lineNumber})`;
+        }
+  }
+
+    
     // Append to log file
     fs.appendFileSync(logFilePath, logMessage);
+    
+    console.log(...[callerInfo].concat(args));
+
 };

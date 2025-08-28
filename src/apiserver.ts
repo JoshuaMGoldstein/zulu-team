@@ -8,6 +8,7 @@ import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project, Verbosity, 
 import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
 import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';
 import dockerManager from './dockermanager';
+import discordManager from './discordmanager'; // Import DiscordManager
 import express from 'express';
 import { log } from './utils/log';
 import { sendChunkedMessage } from './utils/discord';
@@ -24,7 +25,6 @@ const MAX_ATTEMPTS = 5;
 
 class ApiServer {
     private app: express.Application;
-    private discordClients: Map<string, Client> = new Map();
 
     constructor() {
         this.app = createServer();
@@ -32,8 +32,11 @@ class ApiServer {
         this.app.use(this.authenticateToken.bind(this));
         this.setupRoutes();
     }
+    static GetAccountId(req:express.Request):string {
+        return (req as any).account_id;
+    }
 
-    private authenticateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+    private async authenticateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
         // Allow unauthenticated access to /bots (GET) as it's for listing available bots
         if (req.path === '/bots' && req.method === 'GET') {
             return next();
@@ -48,14 +51,19 @@ class ApiServer {
 
         // Check against master API token
         if (token === process.env.API_TOKEN) {
+            (req as any).account_id = 'originalEvent.account_id';
             return next();
         }
 
         // Check against instance-specific API token
         const instanceId = req.header('X-Instance-Id');
+        const account_id = token.split('|')[0];
+        if(!account_id) return;
+
         if (instanceId) {
-            const instance = configManager.getInstances().find(inst => inst.id === instanceId);
+            const instance = (await configManager.getInstances(account_id)).find(inst => inst.id === instanceId);
             if (instance && instance.env && instance.env['API_KEY'] === token) {
+                (req as any).account_id = account_id;
                 return next();
             }
         }
@@ -64,19 +72,10 @@ class ApiServer {
         return res.status(403).send('Access Denied: Invalid Token!');
     }
 
-    public initBots(instanceIds?: string[]) {
-        dockerManager.initBots(instanceIds);
-
-        const instancesToInit = instanceIds
-            ? configManager.getInstances().filter(inst => instanceIds.includes(inst.id))
-            : configManager.getInstances();
-
-        instancesToInit.forEach((instance: any) => {
-            if (instance.enabled) {
-                this.initDiscordBot(instance);
-            }
-        });
-    }
+    //public initBots(instanceIds?: string[]) {
+        //dockerManager.initBots(instanceIds); //I dont think this shoulkd be done, its supposed to happen ON DEMAND.
+        //discordManager.initBots(instanceIds);
+    //}
 
     private createEventFile(instance: Bot, event: BotEvent) {
         const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
@@ -97,7 +96,7 @@ class ApiServer {
         logStream.end();
     }
 
-    private getVerbosity(instance: Bot, event: BotEvent): Verbosity {
+    private async getVerbosity(instance: Bot, event: BotEvent): Promise<Verbosity> {
         const isDelegated = event instanceof DelegationBotEvent;
         const isDm = event instanceof DiscordBotEvent && event.message.channel.type === ChannelType.DM;
 
@@ -106,65 +105,29 @@ class ApiServer {
         if (isDelegated) {
             verbosity = instance.settings?.delegatedVerbosity ?? Verbosity.INHERIT;
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getRoles()[instance.role]?.delegatedVerbosity ?? Verbosity.INHERIT;
+                verbosity = (await configManager.getRoles(instance.account_id))[instance.role]?.delegatedVerbosity ?? Verbosity.INHERIT;
             }
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getSettings().delegatedVerbosity;
+                verbosity = (await configManager.getSettings(instance.account_id))?.delegatedVerbosity??(Verbosity.NONE);
             }
         } else if (isDm) {
             verbosity = instance.settings?.dmVerbosity ?? Verbosity.INHERIT;
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getRoles()[instance.role]?.dmVerbosity ?? Verbosity.INHERIT;
+                verbosity = (await configManager.getRoles(instance.account_id))[instance.role]?.dmVerbosity ?? Verbosity.INHERIT;
             }
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getSettings().dmVerbosity;
+                verbosity = (await configManager.getSettings(instance.account_id))?.dmVerbosity??(Verbosity.STDOUT && Verbosity.TOOLHOOKS);
             }
         } else {
             verbosity = instance.settings?.channelVerbosity ?? Verbosity.INHERIT;
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getRoles()[instance.role]?.channelVerbosity ?? Verbosity.INHERIT;
+                verbosity = (await configManager.getRoles(instance.account_id))[instance.role]?.channelVerbosity ?? Verbosity.INHERIT;
             }
             if (verbosity === Verbosity.INHERIT) {
-                verbosity = configManager.getSettings().channelVerbosity;
+                verbosity = (await configManager.getSettings(instance.account_id))?.channelVerbosity??(Verbosity.STDOUT && Verbosity.TOOLHOOKS);
             }
         }
         return verbosity;
-    }
-
-    private async createStatusMessageIfApplicable(targetInstance:Bot, event:BotEvent):Promise<Message|undefined> {
-        let statusMessage:Message|undefined =undefined;
-         
-        // //Allow other kinds of comms replies (email, slack), etc
-        if(event instanceof DiscordBotEvent) {
-            let discordBotEvent = event as DiscordBotEvent;
-            statusMessage = await discordBotEvent.message.reply('Processing...');
-        } else if(event instanceof DelegationBotEvent) {
-            let commsEvent = event.commsEvent;
-            if(commsEvent instanceof DiscordBotEvent) {
-                let discordCommsEvent = commsEvent as DiscordBotEvent;
-                let discordClient = this.discordClients.get(targetInstance.id);
-                if(discordClient) {
-                    try {
-                        const channel = await discordClient.channels.fetch(commsEvent.message.channelId);
-                        if(channel) {
-                            if(channel instanceof TextChannel) {
-                                statusMessage = await ( channel as TextChannel).send('Received Delegation Request - Processing...');
-                            } else {
-                                console.error('Channel is not a text channel',channel);
-                            }
-                        } else {
-                            console.error('Channel not found:',channel);
-                        }
-                    } catch(error) {
-                        console.error('Error fetching channel or sending status message', error);
-                    }
-                }
-            } else { //TODO: Allow other kinds of comms initialtion (email, slack), etc
-                console.error('No originating comms event found for delegation event ', event);
-                
-            } 
-        }
-        return statusMessage;
     }
 
     private async handleDelegatedBotFlow(fromInstance:Bot, targetInstance: Bot, event:DelegationBotEvent) {
@@ -175,12 +138,12 @@ class ApiServer {
         this.handleBotFlow(targetInstance, event);
     }
 
-    private async handleBotFlow(targetInstance: Bot, event: BotEvent) {
+    public async handleBotFlow(targetInstance: Bot, event: BotEvent) {
         this.createEventFile(targetInstance, event);        
         log(`Activating bot ${targetInstance.id} for event ${event.id}`);
 
-        let statusMessage:Message|undefined = await this.createStatusMessageIfApplicable(targetInstance, event);    
-        const verbosity = this.getVerbosity(targetInstance, event);
+        let statusMessage:Message|undefined = await discordManager.createStatusMessageIfApplicable(targetInstance, event);    
+        const verbosity = await this.getVerbosity(targetInstance, event);
 
         try {
             let botOutput = await dockerManager.activateBot(targetInstance, event, statusMessage);
@@ -253,6 +216,10 @@ class ApiServer {
 
     private async processDelegationBotResponse(fromInstance: Bot, originalEvent: DelegationBotEvent, response: string) {        
         console.log("Received response from instance:"+fromInstance.id +": "+response);
+        if(originalEvent.account_id!= fromInstance.account_id) {
+            throw new Error(`Bad Delegation Response from instance ${fromInstance.account_id} not linked to originalEvent AccountId: ${originalEvent.account_id}`);
+        }
+
         const parsed = parseCodeBlocks(response);
         let responseJson: any;
         try {            
@@ -266,13 +233,14 @@ class ApiServer {
             responseJson = { task_status: 'problem', message: 'Invalid JSON response', notes: response };
         }
 
-        const project = configManager.getProjects().find(p => p.name === originalEvent.project);                
-        const delegator = configManager.getInstances().find(i => i.id === originalEvent.delegator_botid);
-        const developer = configManager.getInstances().find(i => i.id === originalEvent.assignedTo);
+        const project = (await configManager.getProjects(originalEvent.account_id)).find(p => p.name === originalEvent.project);                
+        const delegator = (await configManager.getInstances(originalEvent.account_id)).find(i => i.id === originalEvent.delegator_botid);
+        const developer = (await configManager.getInstances(originalEvent.account_id)).find(i => i.id === originalEvent.assignedTo);
 
     
         
         const nextEvent = new DelegationBotEvent({
+            account_id:originalEvent.account_id,
             id: generateEventId(),
             project: originalEvent.project,
             task_description: originalEvent.task_description,
@@ -301,7 +269,7 @@ class ApiServer {
             return;
         } else if (fromInstance.role === 'developer' && (responseJson.task_status === 'complete' || responseJson.task_status === 'progress')) { 
             // 2. Handle QA flow
-            const qaBot = configManager.getInstances().find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
+            const qaBot = (await configManager.getInstances(originalEvent.account_id)).find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
             if (qaBot) {
                 log(`Developer task complete for ${project.name}. Delegating to QA bot ${qaBot.id}.`);                                
                 this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);
@@ -309,7 +277,7 @@ class ApiServer {
             }
         } else if (fromInstance.role === 'qa' && responseJson.task_status === 'failed') { 
             // 3. Handle QA failure (and max attempts)
-            const developer = configManager.getInstances().find(i => i.id === originalEvent.assignedTo);
+            const developer = (await configManager.getInstances(originalEvent.account_id)).find(i => i.id === originalEvent.assignedTo);
             if (developer && nextEvent.attempts < MAX_ATTEMPTS) {
                 log(`QA failed for ${project.name}. Sending back to developer ${developer.id}.`);
                                 
@@ -331,41 +299,13 @@ class ApiServer {
         }
     }
 
-    private initDiscordBot(instance: Bot) {
-        const client = this.discordClients.get(instance.id);
-        if (client) {
-            client.destroy();
-        }
 
-        const newClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-
-        newClient.once(Events.ClientReady, readyClient => {
-            log(`Bot ${instance.name} is ready! Logged in as ${readyClient.user.tag}`);
-        });
-
-        newClient.on(Events.MessageCreate, async message => {
-            const allowedChannelIds = instance.discordChannelId;
-            const isListening = Array.isArray(allowedChannelIds) ? allowedChannelIds.includes(message.channel.id) : allowedChannelIds === message.channel.id;
-
-            if (newClient.user && isListening && !message.author.bot && message.mentions.has(newClient.user.id)) {
-                const eventId = generateEventId();
-                log(`Discord Message received for ${instance.name} (Event ID: ${eventId}): ${message.content}`);
-                
-                const channelProjects = configManager.getProjects().filter(p => Array.isArray(p.discordChannelIds) && p.discordChannelIds.includes(message.channel.id)).map(p => p.name);
-
-                const discordBotEvent = new DiscordBotEvent({id: generateEventId(),message:message, channelProjects});
-                
-                this.handleBotFlow(instance, discordBotEvent);
-            }
-        });
-
-        newClient.login(instance.discordBotToken);
-        this.discordClients.set(instance.id, newClient);
-    }
 
     private setupRoutes() {
-        this.app.get('/bots', (req, res) => {
-            const bots: Bot[] = configManager.getInstances().map((instance: any) => {
+        this.app.get('/bots', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+
+            const bots: Bot[] = (await configManager.getInstances(account_id)).map((instance: any) => {
                 const settingsPath = path.join(__dirname, `../bot-instances/${instance.id}/.${instance.cli}/settings.json`);
                 const mdPath = path.join(__dirname, `../bot-instances/${instance.id}/${instance.cli.toUpperCase()}.md`);
 
@@ -410,18 +350,20 @@ class ApiServer {
             }
         });
 
-        this.app.post('/instance/:instanceId/delegated-task', (req, res) => {
+        this.app.post('/instance/:instanceId/delegated-task', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+
             const targetInstanceId = req.params.instanceId;
             const taskData = req.body;
             const delegatorId = req.header('X-Instance-Id');
             const originalEventId = req.header('X-Event-Id');            
 
-            const delegator = configManager.getInstances().find((inst: any) => inst.id === delegatorId);
-            if (!delegator || !configManager.getRoles()[delegator.role]?.allowDelegation) {
+            const delegator = (await configManager.getInstances(account_id)).find((inst: any) => inst.id === delegatorId);
+            if (!delegator || !(await configManager.getRoles(account_id))[delegator.role]?.allowDelegation) {
                 return res.status(403).send('This bot is not authorized to delegate tasks.');
             }
 
-            const targetInstance = configManager.getInstances().find((inst: any) => inst.id === targetInstanceId);
+            const targetInstance = (await configManager.getInstances(account_id)).find((inst: any) => inst.id === targetInstanceId);
 
             if(!originalEventId) {res.status(404).send('No X-Event-Id Header provided'); return; }
             if(!delegatorId) { res.status(404).send('No X-Instance-Id Header provided'); return; }
@@ -452,6 +394,7 @@ class ApiServer {
             if (targetInstance && targetInstance.enabled) {                
                 const event:DelegationBotEvent = new DelegationBotEvent(
                     {
+                        account_id:targetInstance.account_id,
                         id:generateEventId(),
                         project:taskData.project,
                         task_description: taskData.task_description,

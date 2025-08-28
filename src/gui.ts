@@ -3,37 +3,91 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ClaudeModels, GeminiModels } from './bots/types';
 import configManager from './configmanager';
+import { publicdb } from './supabase';
+
+// Authentication middleware
+const authenticateUser = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    const accountId = req.headers.accountid as string;
+    
+    if (!token) {
+        return res.status(401).json({ error: 'No token provided' });
+    }
+
+    try {
+        const { data: { user }, error } = await publicdb.auth.getUser(token);
+        if (error) throw error;
+        
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+        
+        // If no account ID is provided, use the user's ID as the account ID
+        if (!accountId) {
+            (req as any).accountId = user.id;
+            (req as any).user = user;
+            return next();
+        }
+        
+        // Verify user has access to the specified account
+        const { data: accountUsers, error: accountUsersError } = await publicdb
+            .from('account_users')
+            .select('role, is_active')
+            .eq('account_id', accountId)
+            .eq('user_id', user.id)
+            .single();
+        
+        if (accountUsersError) throw accountUsersError;
+        
+        if (!accountUsers || !accountUsers.is_active) {
+            return res.status(403).json({ error: 'User does not have access to this account' });
+        }
+        
+        (req as any).accountId = accountId;
+        (req as any).user = user;
+        (req as any).userRole = accountUsers.role;
+        next();
+    } catch (error: any) {
+        res.status(401).json({ error: error.message });
+    }
+};
 
 export const createGui = () => {
     const app = express();
     app.use(express.json());
-    app.use(express.static(path.join(__dirname, '../public')));
-    
-    const instancesPath = path.join(__dirname, '../bot-instances/instances.json');
-    const projectsPath = path.join(__dirname, '../bot-instances/projects.json');
-    const settingsPath = path.join(__dirname, '../bot-instances/settings.json');
-    const rolesPath = path.join(__dirname, '../bot-instances/roles.json');
-    const gitKeysPath = path.join(__dirname, '../bot-instances/gitkeys.json');
+    app.use(express.static(path.join(__dirname, '../public')));    
 
-    const writeJsonFile = (filePath: string, data: any) => {
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-    };
 
     // Reload endpoint
-    app.post('/api/reload-configs', (req, res) => {
-        configManager.load();
+    app.post('/api/reload-configs', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        await configManager.loadUpdateAccount(accountId);
         res.status(200).send();
     });
 
     // Settings routes
-    app.get('/api/settings', (req, res) => {
-        res.json(configManager.getSettings());
+    app.get('/api/settings', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.settings || {});
     });
 
-    app.put('/api/settings', (req, res) => {
+    app.put('/api/settings', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const newSettings = req.body;
-        writeJsonFile(settingsPath, newSettings);
-        res.json(newSettings);
+        
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('settings')
+            .upsert({ account_id: accountId, value: newSettings });
+        
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.settings);
     });
 
 
@@ -56,33 +110,71 @@ export const createGui = () => {
     });
 
     // Role routes
-    app.get('/api/roles', (req, res) => {
-        res.json(configManager.getRoles());
+    app.get('/api/roles', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.roles || {});
     });
 
-    app.post('/api/roles', (req, res) => {
-        const roles = configManager.getRoles();
+    app.post('/api/roles', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const newRole = req.body;
-        roles[newRole.id] = {
-            name: newRole.name,
-            description: newRole.description,
-            dmVerbosity: -1,
-            channelVerbosity: -1,
-            delegatedVerbosity: -1,
-            mountBotInstances: false,
-            allowDelegation: false
-        };
-        writeJsonFile(rolesPath, roles);
-        res.status(201).json(newRole);
+        
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('roles')
+            .upsert({ 
+                account_id: accountId, 
+                key: newRole.id,
+                value: {
+                    name: newRole.name,
+                    description: newRole.description,
+                    dm_verbosity: newRole.dmVerbosity,
+                    channel_verbosity: newRole.channelVerbosity,
+                    delegated_verbosity: newRole.delegatedVerbosity,
+                    mount_bot_instances: newRole.mountBotInstances,
+                    allow_delegation: newRole.allowDelegation
+                }
+            });
+        
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.status(201).json(account?.roles[newRole.id]);
     });
 
-    app.put('/api/roles/:id', (req, res) => {
-        const roles = configManager.getRoles();
+    app.put('/api/roles/:id', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const updatedRole = req.body;
-        if (roles[req.params.id]) {
-            roles[req.params.id] = updatedRole;
-            writeJsonFile(rolesPath, roles);
-            res.json(updatedRole);
+        
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('roles')
+            .upsert({ 
+                account_id: accountId, 
+                key: req.params.id,
+                value: {
+                    name: updatedRole.name,
+                    description: updatedRole.description,
+                    dm_verbosity: updatedRole.dmVerbosity,
+                    channel_verbosity: updatedRole.channelVerbosity,
+                    delegated_verbosity: updatedRole.delegatedVerbosity,
+                    mount_bot_instances: updatedRole.mountBotInstances,
+                    allow_delegation: updatedRole.allowDelegation
+                }
+            });
+        
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        if (account?.roles[req.params.id]) {
+            res.json(account.roles[req.params.id]);
         } else {
             res.status(404).send('Role not found');
         }
@@ -110,109 +202,259 @@ export const createGui = () => {
     });
 
     // Bot routes
-    app.get('/api/bots', (req, res) => {
-        res.json(configManager.getInstances());
+    app.get('/api/bots', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.instances.map(bot => ({
+            id: bot.id,
+            name: bot.name,
+            role: bot.role,
+            cli: bot.cli,
+            enabled: bot.enabled,
+            model: bot.model,
+            preset: bot.preset,
+            //discordBotToken: bot.discordBotToken,
+            //discordChannelId: bot.discordChannelId,
+            managedProjects: bot.managedProjects,
+            status: bot.status,
+            lastActivity: bot.lastActivity,
+            workingDirectory: bot.workingDirectory
+        })) || []);
     });
 
-    app.post('/api/bots', (req, res) => {
-        const instances = configManager.getInstances();
+    app.post('/api/bots', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const newBotData = req.body;
 
-        const newBot = {
-            ...newBotData,
-            model: newBotData.model || 'auto',
-            preset: newBotData.preset || 'auto',
-            status: 'idle',
-            lastActivity: new Date().toISOString(),
-            workingDirectory: `bot-instances/${newBotData.id}`
-        };
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('bot_instances')
+            .insert({                
+                account_id: accountId,
+                bot_id: newBotData.bot_id, //Missing in GUI
+                id: newBotData.id,
+                name: newBotData.name,
+                //type: 'discord',                
+                role: newBotData.role || 'developer',
+                cli: newBotData.cli || 'gemini',
+                enabled: newBotData.enabled !== false,
+                model: newBotData.model || 'auto',
+                preset: newBotData.preset || 'auto',
+                //discord_bot_token: newBotData.discordBotToken || '',
+                //discord_channel_id: newBotData.discordChannelId || '',
+                managed_projects: newBotData.managedProjects || [],
+                status: 'idle',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            });
 
-        instances.push(newBot);
-        writeJsonFile(instancesPath, instances);
-        res.status(201).json(newBot);
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        const bot = account?.instances.find(b => b.id === newBotData.id);
+        res.status(201).json(bot);
     });
 
-    app.put('/api/bots/:id', (req, res) => {
-        const instances = configManager.getInstances();
+    app.put('/api/bots/:id', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const updatedBotData = req.body;
-        const botIndex = instances.findIndex((bot: any) => bot.id === req.params.id);
+        
+        // Get existing bot to preserve fields not being updated
+        const account = await configManager.loadUpdateAccount(accountId);
+        const existingBot = account?.instances.find(b => b.id === req.params.id);
+        
+        if (!existingBot) {
+            return res.status(404).send('Bot not found');
+        }
 
-        if (botIndex !== -1) {
-            const existingBot = instances[botIndex];
-            instances[botIndex] = {
-                ...existingBot,
-                ...updatedBotData,
-                id: existingBot.id,
-                workingDirectory: existingBot.workingDirectory,
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('bot_instances')
+            .update({
+                account_id: accountId,
+                id: req.params.id,
+                name: updatedBotData.name || existingBot.name,
+                type: 'discord', // Always set type to 'discord'                
+                role: updatedBotData.role ?? existingBot.role,
+                cli: updatedBotData.cli ?? existingBot.cli,
+                enabled: updatedBotData.enabled !== undefined ? updatedBotData.enabled : existingBot.enabled,
                 model: updatedBotData.model ?? existingBot.model,
                 preset: updatedBotData.preset ?? existingBot.preset,
-            };
-            writeJsonFile(instancesPath, instances);
-            res.json(instances[botIndex]);
-        } else {
-            res.status(404).send('Bot not found');
+                //discord_bot_token: updatedBotData.discordBotToken ?? existingBot.discordBotToken,
+                //discord_channel_id: updatedBotData.discordChannelId ?? existingBot.discordChannelId,
+                managed_projects: updatedBotData.managedProjects ?? existingBot.managedProjects,
+                
+                status: updatedBotData.status || existingBot.status,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', req.params.id)
+            .eq('account_id', accountId);
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
         }
+
+        // Update in memory
+        const updatedAccount = await configManager.loadUpdateAccount(accountId);
+        const bot = updatedAccount?.instances.find(b => b.id === req.params.id);
+        res.json(bot);
     });
 
     // Project routes
-    app.get('/api/projects', (req, res) => {
-        res.json(configManager.getProjects());
+    app.get('/api/projects', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.projects.map(project => ({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            repositoryUrl: project.repositoryUrl,
+            assignedQa: project.assignedQa,
+            discordChannelIds: project.discordChannelIds,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt
+        })) || []);
     });
 
-    app.post('/api/projects', (req, res) => {
-        const projects = configManager.getProjects();
+    app.post('/api/projects', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const newProjectData = req.body;
         const now = new Date().toISOString();
 
-        const newProject = {
-            ...newProjectData,
-            createdAt: now,
-            updatedAt: now,
-        };
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('projects')
+            .insert({
+                account_id: accountId,
+                id: newProjectData.id,
+                name: newProjectData.name,
+                config: {
+                    description: newProjectData.description || '',
+                    repository_url: newProjectData.repositoryUrl || '',
+                    assigned_qa: newProjectData.assignedQa || '',
+                    discord_channel_ids: newProjectData.discordChannelIds || []
+                },
+                settings: newProjectData.settings || {},
+                created_at: now,
+                updated_at: now
+            });
 
-        projects.push(newProject);
-        writeJsonFile(projectsPath, projects);
-        res.status(201).json(newProject);
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        const project = account?.projects.find(p => p.id === newProjectData.id);
+        res.status(201).json(project);
     });
 
-    app.put('/api/projects/:id', (req, res) => {
-        const projects = configManager.getProjects();
+    app.put('/api/projects/:id', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const updatedProjectData = req.body;
-        const projectIndex = projects.findIndex((p: any) => p.id === req.params.id);
-
-        if (projectIndex !== -1) {
-            const existingProject = projects[projectIndex];
-            projects[projectIndex] = {
-                ...existingProject,
-                ...updatedProjectData,
-                id: existingProject.id, // Ensure ID cannot be changed
-                updatedAt: new Date().toISOString(),
-            };
-            writeJsonFile(projectsPath, projects);
-            res.json(projects[projectIndex]);
-        } else {
-            res.status(404).send('Project not found');
+        
+        // Get existing project to preserve fields not being updated
+        const account = await configManager.loadUpdateAccount(accountId);
+        const existingProject = account?.projects.find(p => p.id === req.params.id);
+        
+        if (!existingProject) {
+            return res.status(404).send('Project not found');
         }
+
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('projects')
+            .update({
+                account_id: accountId,
+                id: req.params.id,
+                name: updatedProjectData.name || existingProject.name,
+                description: updatedProjectData.description ?? existingProject.description,
+                repository_url: updatedProjectData.repositoryUrl ?? existingProject.repositoryUrl,
+                assigned_qa: updatedProjectData.assignedQa ?? existingProject.assignedQa,
+                discord_channel_ids: updatedProjectData.discordChannelIds ?? existingProject.discordChannelIds,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', req.params.id)
+            .eq('account_id', accountId);
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        // Update in memory
+        const updatedAccount = await configManager.loadUpdateAccount(accountId);
+        const project = updatedAccount?.projects.find(p => p.id === req.params.id);
+        res.json(project);
     });
 
     // Git Key routes
-    app.get('/api/gitkeys', (req, res) => {
-        res.json(JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8')));
+    app.get('/api/gitkeys', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        const account = await configManager.loadUpdateAccount(accountId);
+        res.json(account?.gitKeys || []);
     });
 
-    app.post('/api/gitkeys', (req, res) => {
-        const keys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
+    app.post('/api/gitkeys', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
         const newKey = req.body;
-        keys.push(newKey);
-        writeJsonFile(gitKeysPath, keys);
-        res.status(201).json(newKey);
+
+        // Save to Supabase
+        const { error } = await publicdb
+            .from('git_keys')
+            .insert({
+                account_id: accountId,
+                id: newKey.id,
+                name: newKey.name,
+                private_key: newKey.value
+            });
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        // Update in memory
+        const account = await configManager.loadUpdateAccount(accountId);
+        const key = account?.gitKeys.find(k => k.id === newKey.id);
+        res.status(201).json(key);
     });
 
-    app.delete('/api/gitkeys/:id', (req, res) => {
-        let keys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
-        keys = keys.filter((key: any) => key.id !== req.params.id);
-        writeJsonFile(gitKeysPath, keys);
+    app.delete('/api/gitkeys/:id', authenticateUser, async (req, res) => {
+        const accountId = (req as any).accountId;
+        
+        // Delete from Supabase
+        const { error } = await publicdb
+            .from('git_keys')
+            .delete()
+            .eq('id', req.params.id)
+            .eq('account_id', accountId);
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        // Update in memory
+        await configManager.loadUpdateAccount(accountId);
         res.status(204).send();
+    });
+
+    app.post('/api/register', async (req, res) => {
+        const { email, password } = req.body;
+        try {
+            const { data, error } = await publicdb.auth.signUp({
+                email,
+                password,
+            });
+
+            if (error) {
+                return res.status(400).json({ error: error.message });
+            }
+            res.status(200).json({ message: 'User registered successfully', user: data.user });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
     });
 
     return app;

@@ -17,7 +17,7 @@ gcloud artifacts repositories create zulu-team --repository-format=docker --desc
 ../build.sh
 #docker build -t us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest 
 docker push us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest
-gcloud run deploy zulu-gemini-docker --image us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest --region us-east4 --allow-unauthenticated --min-instances=0 --max-instances=5 --concurrency=1
+gcloud run deploy zulu-gemini-docker --image us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest --region us-east4 --allow-unauthenticated --min-instances=0 --max-instances=8 --concurrency=1
 
 #--port=8088 
 

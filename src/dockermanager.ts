@@ -60,8 +60,10 @@ class DockerManager {
         }
         return containerMap;
     }
+/*
+    public async initBots(account_id:string ) { //instanceIds?: string[]
+        let instancesToInit = (await configManager.getInstances(account_id));
 
-    public async initBots(instanceIds?: string[]) {
         log('Initializing and verifying bot containers...');
         const runningContainers = await this.getRunningContainers();
 
@@ -78,12 +80,8 @@ class DockerManager {
                     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
                     log('Force-regenerate flag detected; all containers will be recreated.');
                 }
-            } catch { /* ignore */ }
+            } catch { }
         }
-
-        const instancesToInit = instanceIds
-            ? configManager.getInstances().filter(inst => instanceIds.includes(inst.id))
-            : configManager.getInstances();
 
         for (const instance of instancesToInit) {
             if (instance.enabled) {
@@ -104,7 +102,7 @@ class DockerManager {
                     const containerInfo = await this.docker.inspect(containerName);
                     const platformLine = containerInfo.config.env['LLMPROVIDER'];
                     if (platformLine) currentPlatform = platformLine;
-                } catch { /* ignore */ }
+                } catch { }
                 
                 let expectedPlatform = configmanager.getProviderForModel(instance.model);                
    
@@ -124,12 +122,12 @@ class DockerManager {
                 }
             }
         }
-    }
+    }*/
 
 
     private async startBotContainer(instance: Bot) {        
         const imageName = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
-        const containerName = `zulu-instance-${instance.id}`;
+        const containerName = this.getContainerName(instance);
         
         //We used to create VOLUMES here, but now FILES
         //const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
@@ -139,6 +137,7 @@ class DockerManager {
         //FIXME: Do we really need to provide this to runOptions, or can we just provide to exec() which might be more secure?
         const runOptions: RunOptions = {
             //volumes: { [`${volumePath}`]: '/workspace' },
+            files: instance.files,
             env: instance.env //This might not needed anymore because exec passes it, but i think we use it to verify the container //{ LLMPROVIDER: provider } 
         };
         
@@ -150,11 +149,17 @@ class DockerManager {
         }
     }    
 
+    private getContainerName(instance:Bot) {
+        return  `${instance.account_id}-zulu-instance-${instance.id}`;
+    }
+
     private async _ensureContainerIsRunning(instance: Bot): Promise<void> {
-        const containerName = `zulu-instance-${instance.id}`;
+        const containerName = this.getContainerName(instance);
         try {
             await this.docker.inspect(containerName);
             log(`Container ${containerName} is already running.`);
+
+            //FIXME: Validate parameters?
         } catch (error) {
             log(`Container ${containerName} is not running or not found. Attempting to restart...`);
             templateManager.applyTemplates(instance);
@@ -187,7 +192,7 @@ class DockerManager {
     }
 
     public async cloneProject(instance: Bot, project: Project) {
-        const containerName = `zulu-instance-${instance.id}`;
+        const containerName = this.getContainerName(instance);
         const projectPath = `/workspace/${project.name}`;
 
         try {
@@ -216,18 +221,23 @@ class DockerManager {
 
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
+        if(event.account_id != instance.account_id) {
+            throw new Error(`_runActivation instance.account_id ${instance.account_id} != event.account_id ${event.account_id}`);
+        }
+
+
         const env:Record<string,string> = {}; 
         Object.assign(env,instance.env);
         env.EVENT_ID = event.id; 
 
         // Existing activation logic (cloning and container exec)
         if (event instanceof DelegationBotEvent) {
-            const project = configManager.getProjects().find(p => p.name === event.project);
+            const project = (await configManager.getProjects(instance.account_id)).find(p => p.name === event.project);
             if (project) {
                 await this.cloneProject(instance, project);
                 // Checkout specified branch if provided
                 if (event.branch) {
-                    const containerName = `zulu-instance-${instance.id}`;
+                    const containerName = this.getContainerName(instance);
                     try {
                         const context = workflowManager.buildGitContext(this.docker, containerName, project, event.branch);
                         await workflowManager.executeWorkflow('set-branch', context);
@@ -241,7 +251,7 @@ class DockerManager {
             const commsEvent = event as DiscordBotEvent;
             for (let p = 0; p < commsEvent.channelProjects.length; p++) {
                 const projectName = commsEvent.channelProjects[p];
-                const project = configManager.getProjects().find(p => p.name === projectName);
+                const project = (await configManager.getProjects(instance.account_id)).find(p => p.name === projectName);
                 if (project) {
                     await this.cloneProject(instance, project);
                 }
@@ -249,7 +259,7 @@ class DockerManager {
         }
 
         const messageContent = JSON.stringify(event.getSummary());
-        const containerName = `zulu-instance-${instance.id}`;
+        const containerName = this.getContainerName(instance);
         // Determine model and flags
         let modelFlag = '';
         let flashFlag = '';

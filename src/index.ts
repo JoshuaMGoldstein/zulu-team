@@ -10,7 +10,7 @@ const main = async () => {
     const guiServer = createGui();
 
     await updateModelsFile();
-    apiServer.initBots();
+    //apiServer.initBots();
 
     guiServer.listen(3000, () => {
         log('Management GUI listening on port 3000');

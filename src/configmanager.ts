@@ -8,8 +8,13 @@ import { getApiUrl } from './utils/api';
 import * as dotenv from 'dotenv';
 import {publicdb, PSQLERROR} from './supabase';
 import {assert, logAssert} from './utils/assert';
+import templatemanager from './templatemanager';
+import {Database} from './db/public.types'
 
 dotenv.config();
+
+
+type Bot_Instance = Database['public']['Tables']['bot_instances']['Row'];
 
 class Account {
     public instances: Bot[] = [];
@@ -43,7 +48,7 @@ class ConfigManager {
     //FIXME: We need to have our own /chat/completions endpoint so that we dont have to give API KEYS to the bots, because thats insecure and ridiculous.
     //Plus this is the only way we can seriously track usage for billing
     //And is the gateway to our being our own inference provider.
-    public generateEnvForInstance(instance:Bot):Record<string,string> {
+    public generateEnvForInstance(instance:Bot_Instance):Record<string,string> {
         let provider = this.getProviderForModel(instance.model);
         let env:Record<string,string> = {};
 
@@ -55,7 +60,7 @@ class ConfigManager {
         env["INSTANCE_ID"] = instance.id;
         env["API_URL"] = getApiUrl();
 
-        log("Instance cli is type: "+instance.cli);
+        log("Instance container is type: "+instance.cli);
 
         if (instance.cli === 'gemini') {
             env!['GEMINI_API_KEY'] = process.env.GEMINI_API_KEY || '';
@@ -70,41 +75,118 @@ class ConfigManager {
         return env;
     }
 
-    private generateFilesForInstance(instance:Bot):Record<string,string> {
-        const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
-        let files:Record<string,string>={};
-        try {
-            if(instance.cli == 'gemini') {
-                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('utf8');
-                files['/workspace/GEMINI.md'] = fs.readFileSync(`${volumePath}/GEMINI.md`).toString('utf8');
-            } else if(instance.cli == 'claude') {
-                files[`/workspace/.${instance.cli}/settings.json`] = fs.readFileSync(`${volumePath}/.${instance.cli}/settings.json`).toString('utf8');
-                files['/workspace/CLAUDE.md'] = fs.readFileSync(`${volumePath}/CLAUDE.md`).toString('utf8');
+    private async generateFilesForInstance(instance:Bot_Instance):Promise<Record<string,string|Buffer>> {
+        const files:Record<string,string|Buffer> = {};
+        
+        try {            
+            //split imageName into alias and the imageName
+            /*let splitImageName = instance.imageName.split('/');
+            if(splitImageName.length ==1) {
+             // Load container image name from our account 
+                const { data: containerImage, error:containerImageError} = await publicdb
+                    .from('container_images')    
+                    .select('cli')
+                    .eq('account_id',${instance.account_id});
+            } else {
+                //Get a public image (or maybe the alias is for our own account?)
+            }*/
+
+            let cli = 'gemini';            
+
+            // Load role-specific MD from database
+            const { data: roleData, error: roleError } = await publicdb
+                .from('roles')
+                .select('*')
+                .eq('id', instance.role)                
+            
+            if (!roleError && roleData.length>=1 && roleData[0]?.md) {
+                // Apply macro replacement to the role MD
+                const processedMd = templatemanager.replaceMacros(roleData[0].md, instance);
+                files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
+            } else {
+                console.log(`Couldn't load .MD file for role: ${instance.role}`);
             }
-        } catch(e) {
-            log(`Error generating Files for instance ${instance.id}`);
+
+            // Load container-specific settings from database
+            // FIXME - this image might be a slash delimited public image from another account
+
+            const { data: containerFiles, error: containerError } = await publicdb
+                .from('container_image_files')
+                .select('*')
+                .eq('container_name', instance.image);
+                        
+            (containerFiles || []).reduce( (acc, x) => { 
+                acc[x.filename] = x.text || (x.data?Buffer.from(x.data,'hex') : ''); return acc;
+            } ,files);
+
+
+        } catch (e) {
+            log(`Error generating files for instance ${instance.id}: ${e}`);
         }
-      
 
         return files;
     }
 
-    public load() {
-        // Resolve provider from models.json (assume moonshot if not found)
-        const modelsPath = path.resolve(__dirname, '../../models.json');
+    public async load() {
+        try {
+            const { data: models, error } = await publicdb
+                .from('models')
+                .select('*');
 
-        if (fs.existsSync(modelsPath)) {
-            const models = JSON.parse(fs.readFileSync(modelsPath, 'utf-8'));
-            this.toolModels = models.toolModels;
-            this.flashModels = models.flashModels;            
-        }
-
+            if (!error) {
+                // Successfully loaded from Supabase
+                this.toolModels = models
+                    .filter((m: any) => m.category === 'tool')
+                    .map((m: any) => ({
+                        id: m.id,
+                        name: m.display_name || m.name,
+                        description: m.description || '',
+                        provider: m.provider,
+                        supported_parameters: m.supported_parameters || []
+                    }));
+                this.flashModels = models
+                    .filter((m: any) => m.category === 'flash')
+                    .map((m: any) => ({
+                        id: m.id,
+                        name: m.display_name || m.name,
+                        description: m.description || '',
+                        provider: m.provider,
+                        supported_parameters: m.supported_parameters || []
+                    }));
+                console.log(`Loaded ${this.toolModels.length} tool models and ${this.flashModels.length} flash models from Supabase`);
+            }
+        } catch(e:any) {
+            console.log("Error loading models");
+         }
     }
     public async loadUpdateAccount(accountId:string):Promise<Account> {
         let account = this.accounts.get(accountId);
         if(!account) account = new Account();
 
         try {
+            //FIXME: Get bot settings and apply to bot
+            const { data: botsettings, error: botSettingsError } = await publicdb
+                .from('bot_settings')
+                .select('*')
+                .eq('account_id', accountId);
+            if(botSettingsError && botSettingsError.code != PSQLERROR.NORESULTS) throw botSettingsError;
+
+            let mappedBotSettings:Record<string, BotSettings> = {};
+                        
+            ( botsettings || [] ).reduce(
+                (acc, x)=> {
+                mappedBotSettings[x.instance_id] = {
+                delegatedVerbosity: x.delegated_verbosity || -1,
+                dmVerbosity: x.dm_verbosity || -1,
+                channelVerbosity: x.channel_verbosity || -1,
+                mountBotInstances: x.mount_bot_instances || false,
+                allowDelegation: x.allow_delegation || false
+                }
+                return mappedBotSettings;
+            },
+            {}); //initialvalue
+           
+
             // Get bot instances
             const { data: instances, error: instancesError } = await publicdb
                 .from('bot_instances')
@@ -113,45 +195,31 @@ class ConfigManager {
             
             if (instancesError) throw instancesError;
             
-            account.instances = (instances || []).map(inst => ({
-                account_id: inst.account_id,
-                bot_id: inst.bot_id,
-                id: inst.id,
-                name: inst.name,
-                role: inst.role || 'developer',
-                cli: inst.cli || 'gemini',
-                enabled: inst.enabled !== false,
-                model: inst.model || 'auto',
-                preset: inst.preset || 'auto',
-                //discordBotToken: inst.discord_bot_token || '',
-                //discordChannelId: inst.discord_channel_id || '',
-                managedProjects: inst.managed_projects.split(',').map(p=>p.trim()) || [],
-                settings: {},
-                files: this.generateFilesForInstance(inst as any),
-                env: this.generateEnvForInstance(inst as any),
-                status: inst.status || 'idle',
-                lastActivity: inst.updated_at || new Date().toISOString(),
-                workingDirectory: `bot-instances/${inst.id}`
-            })) as Bot[];
-
-            //FIXME: Get bot settings and apply to bot
-            const { data: botsettings, error: botSettingsError } = await publicdb
-                .from('bot_settings')
-                .select('*')
-                .eq('account_id', accountId);
-            if(botSettingsError && botSettingsError.code != PSQLERROR.NORESULTS) throw botSettingsError;
-            if(botsettings) {
-                botsettings.forEach( (x) => {
-                    let instance = account.instances.find(y => y.id == x.instance_id);
-                    if(instance) {
-                        instance.settings = {delegatedVerbosity: x.delegated_verbosity, 
-                            dmVerbosity: x.dm_verbosity, 
-                            channelVerbosity: x.channel_verbosity,
-                            mountBotInstances: x.mount_bot_instances, 
-                            allowDelegation: x.allow_delegation};
-                    }
-                } );
-            }                    
+            if(instances) {
+                for(var i=0; i<instances.length; i++) {
+                    let inst = instances[i];
+                    account.instances.push({
+                        account_id: inst.account_id,
+                        bot_id: inst.bot_id,
+                        id: inst.id,
+                        name: inst.name,
+                        role: inst.role || 'developer',
+                        imageName: inst.image || 'gemini-docker',
+                        cli: inst.cli || 'gemini',
+                        enabled: inst.enabled !== false,
+                        model: inst.model || 'auto',
+                        preset: inst.preset || 'auto',
+                        //discordBotToken: inst.discord_bot_token || '',
+                        //discordChannelId: inst.discord_channel_id || '',
+                        managedProjects: inst.managed_projects.split(',').map(p=>p.trim()) || [],
+                        settings: mappedBotSettings[inst.id],
+                        files: await this.generateFilesForInstance(inst),
+                        env: this.generateEnvForInstance(inst),
+                        lastActivity: inst.updated_at || new Date().toISOString(),
+                        workingDirectory: `bot-instances/${inst.id}`
+                    });
+                }
+            }        
 
             // Get projects
             const { data: projects, error: projectsError } = await publicdb

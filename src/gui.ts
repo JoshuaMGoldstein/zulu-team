@@ -216,7 +216,6 @@ export const createGui = () => {
             //discordBotToken: bot.discordBotToken,
             //discordChannelId: bot.discordChannelId,
             managedProjects: bot.managedProjects,
-            status: bot.status,
             lastActivity: bot.lastActivity,
             workingDirectory: bot.workingDirectory
         })) || []);
@@ -285,9 +284,7 @@ export const createGui = () => {
                 preset: updatedBotData.preset ?? existingBot.preset,
                 //discord_bot_token: updatedBotData.discordBotToken ?? existingBot.discordBotToken,
                 //discord_channel_id: updatedBotData.discordChannelId ?? existingBot.discordChannelId,
-                managed_projects: updatedBotData.managedProjects ?? existingBot.managedProjects,
-                
-                status: updatedBotData.status || existingBot.status,
+                managed_projects: updatedBotData.managedProjects ?? existingBot.managedProjects,                            
                 updated_at: new Date().toISOString()
             })
             .eq('id', req.params.id)

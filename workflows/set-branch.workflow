@@ -1,4 +1,4 @@
-FROM clone-project
+FROM scratch
 
 ARG BRANCH_NAME
 

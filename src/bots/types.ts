@@ -42,19 +42,11 @@ export interface BotOutput {
     next?: Promise<BotOutput>;
 }
 
-export enum BotRole {
-    DEVELOPER = 'developer',
-    PROJECT_MANAGER = 'project-manager',
-    QA = 'qa'
-}
 
-export enum BotCLI {
-    GEMINI = 'gemini',
-    CLAUDE = 'claude'
-}
+
 
 export enum BotStatus {
-    IDLE = 'idle',
+    DISABLED = 'disabled',
     ACTIVE = 'active'
 }
 
@@ -73,24 +65,24 @@ export interface Bot {
     account_id:string //added for multi-tenant
 
     bot_id:string;
-    
+
     id: string; //instance-id
     name:string;
-    role: BotRole;
-    cli: BotCLI;
+    role: string;
+    cli: string; //still 'gemini' and stored in database, at least for now. But it may be better to determine this from the container image.
+    imageName: string; //Now this is ithe name of the container image
     enabled: boolean;
     model: string; // "auto" or any model id
     preset: string; // "auto" or preset name
     //discordBotToken: string;
     //discordChannelId: string | string[];
-    settings: BotSettings;
-    status:BotStatus;
+    settings: BotSettings;    
     workingDirectory:string;
     lastActivity:string; //Datetime
     managedProjects:string | string[];
 
     //Runtime settings (currently generated in dockermanager.ts, but maybe should be moved to templatemanager.ts)
-    files:Record<string,string>;
+    files:Record<string,string|Buffer>;
     env: Record<string,string>;
 }
 

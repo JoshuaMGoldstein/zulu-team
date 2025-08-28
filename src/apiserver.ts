@@ -4,7 +4,7 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 import * as fs from 'fs';
 import * as path from 'path';
-import { Bot, BotEventType, BotOutput, BotRole, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
+import { Bot, BotEventType, BotOutput, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
 import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
 import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';
 import dockerManager from './dockermanager';
@@ -268,8 +268,8 @@ class ApiServer {
             }
             return;
         } else if (fromInstance.role === 'developer' && (responseJson.task_status === 'complete' || responseJson.task_status === 'progress')) { 
-            // 2. Handle QA flow
-            const qaBot = (await configManager.getInstances(originalEvent.account_id)).find(i => i.role == BotRole.QA && i.managedProjects.indexOf(project.name)>=0);
+            // 2. Handle QA flow --FIXME: we shouldnt be hardcoding roles at all.
+            const qaBot = (await configManager.getInstances(originalEvent.account_id)).find(i => i.role == 'qa' && i.managedProjects.indexOf(project.name)>=0);
             if (qaBot) {
                 log(`Developer task complete for ${project.name}. Delegating to QA bot ${qaBot.id}.`);                                
                 this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);
@@ -306,12 +306,8 @@ class ApiServer {
             const account_id = ApiServer.GetAccountId(req);
 
             const bots: Bot[] = (await configManager.getInstances(account_id)).map((instance: any) => {
-                const settingsPath = path.join(__dirname, `../bot-instances/${instance.id}/.${instance.cli}/settings.json`);
-                const mdPath = path.join(__dirname, `../bot-instances/${instance.id}/${instance.cli.toUpperCase()}.md`);
-
-                const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) : {};
-                const md = fs.existsSync(mdPath) ? fs.readFileSync(mdPath, 'utf-8') : '';
-
+                const settings = instance.settings;
+                const md = instance.md;
                 return { ...instance, settings, md };
             });
             res.json(bots);

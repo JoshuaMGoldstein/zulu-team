@@ -1,7 +1,8 @@
 import { createGui } from './gui';
 import apiServer from './apiserver';
 import { log } from './utils/log';
-import { updateModelsFile } from './models';
+import { updateModelsInSupabase } from './models';
+import configManager from './configmanager';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -9,7 +10,8 @@ dotenv.config();
 const main = async () => {
     const guiServer = createGui();
 
-    await updateModelsFile();
+    await updateModelsInSupabase();
+    await configManager.load(); // Ensure models are loaded from Supabase
     //apiServer.initBots();
 
     guiServer.listen(3000, () => {

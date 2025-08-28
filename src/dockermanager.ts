@@ -60,69 +60,6 @@ class DockerManager {
         }
         return containerMap;
     }
-/*
-    public async initBots(account_id:string ) { //instanceIds?: string[]
-        let instancesToInit = (await configManager.getInstances(account_id));
-
-        log('Initializing and verifying bot containers...');
-        const runningContainers = await this.getRunningContainers();
-
-        // Check force-regenerate flag
-        const settingsPath = path.resolve(__dirname, '../settings.json');
-        let forceRegenerate = false;
-        if (fs.existsSync(settingsPath)) {
-            try {
-                const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-                forceRegenerate = !!settings.forceregenerateinstances;
-                if (forceRegenerate) {
-                    // consume the flag
-                    delete settings.forceregenerateinstances;
-                    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-                    log('Force-regenerate flag detected; all containers will be recreated.');
-                }
-            } catch { }
-        }
-
-        for (const instance of instancesToInit) {
-            if (instance.enabled) {
-                const containerName = `zulu-instance-${instance.id}`;
-                const expectedImage = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
-
-                // Prepare SSH key
-                const sshDir = path.join(__dirname, `../bot-instances/${instance.id}/.ssh`);
-                if (!fs.existsSync(sshDir)) {
-                    fs.mkdirSync(sshDir, { recursive: true });
-                }
-
-                const runningImage = runningContainers.get(containerName);
-                
-                // Check current platform env
-                let currentPlatform = 'unknown';
-                try {
-                    const containerInfo = await this.docker.inspect(containerName);
-                    const platformLine = containerInfo.config.env['LLMPROVIDER'];
-                    if (platformLine) currentPlatform = platformLine;
-                } catch { }
-                
-                let expectedPlatform = configmanager.getProviderForModel(instance.model);                
-   
-
-                if (forceRegenerate || runningImage !== expectedImage || currentPlatform !== expectedPlatform) {
-                    if (forceRegenerate) {
-                        log(`Force-regenerating container ${containerName}.`);
-                    } else {
-                        log(`Container ${containerName} needs recreation (image=${runningImage}, platform=${currentPlatform} → expected=${expectedImage}, platform=${expectedPlatform}).`);
-                    }
-                    await this.docker.rm(containerName, true);
-                    templateManager.applyTemplates(instance);
-                    await this.startBotContainer(instance);
-                } else {
-                    log(`Container ${containerName} is correctly configured.`);
-                    templateManager.applyTemplates(instance);
-                }
-            }
-        }
-    }*/
 
 
     private async startBotContainer(instance: Bot) {        
@@ -162,7 +99,7 @@ class DockerManager {
             //FIXME: Validate parameters?
         } catch (error) {
             log(`Container ${containerName} is not running or not found. Attempting to restart...`);
-            templateManager.applyTemplates(instance);
+            //templateManager.applyTemplates(instance);
             await this.startBotContainer(instance);
         }
     }
@@ -210,7 +147,7 @@ class DockerManager {
         log(`Cloning project ${project.name} for instance ${instance.id}`);
 
         try {
-            const context = workflowManager.buildGitContext(this.docker, containerName, project);
+            const context = await workflowManager.buildGitContext(this.docker, containerName, project);
             await workflowManager.executeWorkflow('clone-project', context);
             log(`Project ${project.name} cloned successfully into ${containerName}:${projectPath}.`);
         } catch (error) {
@@ -239,7 +176,7 @@ class DockerManager {
                 if (event.branch) {
                     const containerName = this.getContainerName(instance);
                     try {
-                        const context = workflowManager.buildGitContext(this.docker, containerName, project, event.branch);
+                        const context = await workflowManager.buildGitContext(this.docker, containerName, project, event.branch);
                         await workflowManager.executeWorkflow('set-branch', context);
                         log(`Checked out branch ${event.branch} for project ${project.name}`);
                     } catch (err) {

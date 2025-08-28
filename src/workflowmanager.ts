@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { log } from './utils/log';
 import { IDocker, ExecOptions } from './utils/idocker';
+import { publicdb } from './supabase';
 
 export interface WorkflowStep {
   type: 'ARG' | 'USER' | 'ENV' | 'COPY' | 'WORKDIR' | 'RUN';
@@ -32,20 +33,31 @@ export class WorkflowManager {
   /**
    * Build a context for Git-based workflows with all necessary arguments and files
    */
-  public buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string): WorkflowContext {
-    const gitKeysPath = path.join(__dirname, '../bot-instances/gitkeys.json');
-    const gitKeys = JSON.parse(fs.readFileSync(gitKeysPath, 'utf-8'));
-    const sshKey = gitKeys.find((key: any) => key.id === project.gitKeyId) || gitKeys[0];
+  public async buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string): Promise<WorkflowContext> {
+    // Fetch git key data from database using project.account_id
+    const { data: gitKeys, error: gitKeysError } = await publicdb
+      .from('git_keys')
+      .select('*')
+      .eq('account_id', project.account_id);
+    
+    if (gitKeysError || !gitKeys || gitKeys.length === 0) {
+      throw new Error(`No git keys found for account ${project.account_id}`);
+    }
+    
+    const sshKey = gitKeys.find((key: any) => key.id === project.git_key_id) || gitKeys[0];
     
     // Decode the base64 encoded private key
-    const decodedPrivateKey = Buffer.from(sshKey.privateKey, 'base64').toString('utf-8');
+    if (!sshKey.private_key) {
+      throw new Error(`No private key found for git key ${sshKey.id}`);
+    }
+    const decodedPrivateKey = Buffer.from(sshKey.private_key, 'base64').toString('utf-8');
     
     const args: Record<string, string> = {
       REPO_URL: project.repositoryUrl,
       PROJECT_NAME: project.name,
       SSH_KEY_PATH: sshKey.id,
       KEY_FILENAME: sshKey.id,
-      ACCOUNT_ID: project.accountId || 'default',
+      ACCOUNT_ID: project.account_id || 'default',
       PROJECT_ID: project.name
     };
     

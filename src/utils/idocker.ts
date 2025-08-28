@@ -108,7 +108,7 @@ export interface RunOptions {
     /** Environment variables to set for the command */
     env?: Record<string, string>;
     /** Files to write to container before executing command (path: content pairs) */
-    files?: Record<string, string>;    
+    files?: Record<string, string|Buffer>;    
 }
 
 /**

@@ -109,6 +109,8 @@ export interface RunOptions {
     env?: Record<string, string>;
     /** Files to write to container before executing command (path: content pairs) */
     files?: Record<string, string|Buffer>;    
+    /** Whether to run container with privileged access (for FUSE mounting) */
+    privileged?: boolean;
 }
 
 /**

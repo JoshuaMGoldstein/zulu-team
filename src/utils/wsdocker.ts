@@ -290,6 +290,11 @@ export class WSDocker implements IDocker {
     }
 
     private async loadVolumeFiles(containerName: string, sourcePath: string, destinationPath: string): Promise<void> {
+        if (sourcePath.startsWith('gs://')) {
+            await this.mountGCSBucket(containerName, sourcePath, destinationPath);
+            return;
+        }
+
         if (!fs.existsSync(sourcePath)) {
             console.log(`Source path ${sourcePath} does not exist`);
             return;
@@ -321,6 +326,50 @@ export class WSDocker implements IDocker {
         };
 
         loadFilesRecursive('');
+    }
+
+    private async mountGCSBucket(containerName: string, sourcePath: string, destinationPath: string): Promise<void> {
+        const connection = this.connections.get(containerName);
+        if (!connection) {
+            console.log(`No connection found for ${containerName}`);
+            return;
+        }
+
+        // Parse GCS path: gs://bucket-name/path/to/subdir
+        const gcsPath = sourcePath.replace('gs://', '');
+        const [bucketName, ...pathParts] = gcsPath.split('/');
+        const bucketPath = pathParts.join('/');
+
+        console.log(`Setting up GCS mount: ${sourcePath} -> ${destinationPath}`);
+
+        // Create mount script using the mount-gcs.workflow format
+        const mountScript = `#!/bin/bash
+set -e
+
+# Ensure mount point exists
+mkdir -p "${destinationPath}"
+
+# Mount GCS bucket using gcsfuse
+if [ -f /workspace/service-account-key.json ]; then
+    export GOOGLE_APPLICATION_CREDENTIALS=/workspace/service-account-key.json
+    gcsfuse ${bucketPath ? '--only-dir ' + bucketPath : ''} ${bucketName} "${destinationPath}"
+    echo "Successfully mounted ${sourcePath} to ${destinationPath}"
+else
+    echo "Warning: No service account key found, skipping GCS mount"
+fi
+`;
+
+        // Add mount script to container files
+        if (!connection.files) connection.files = {};
+        connection.files['/workspace/mount-gcs.sh'] = mountScript;
+
+        // Make script executable and run it
+        try {
+            await this.exec(containerName, 'chmod +x /workspace/mount-gcs.sh');
+            await this.exec(containerName, '/workspace/mount-gcs.sh');
+        } catch (error) {
+            console.log(`Error mounting GCS bucket:`, error);
+        }
     }
 
     async rm(containerName: string, force: boolean = true): Promise<void> {

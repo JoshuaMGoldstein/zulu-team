@@ -66,17 +66,32 @@ class DockerManager {
         const imageName = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
         const containerName = this.getContainerName(instance);
         
-        //We used to create VOLUMES here, but now FILES
-        //const volumePath = path.resolve(__dirname, `../bot-instances/${instance.id}`);
-        //But  some things are missing like .events / .logs
-        //We really need WORKFLOWS to take the place so we can have a run based workflow that sets things up for each bot role.
-        
-        //FIXME: Do we really need to provide this to runOptions, or can we just provide to exec() which might be more secure?
+        const account = await configManager.getAccount(instance.account_id);
         const runOptions: RunOptions = {
-            //volumes: { [`${volumePath}`]: '/workspace' },
-            files: instance.files,
-            env: instance.env //This might not needed anymore because exec passes it, but i think we use it to verify the container //{ LLMPROVIDER: provider } 
+            files: { ...instance.files },
+            env: instance.env,
+            volumes: {},
+            privileged: false,
         };
+
+        if (account) {
+            // Add service account key if available
+            const serviceAccount = await configManager.getServiceAccount(instance.account_id);
+            if (serviceAccount?.private_key) {
+                runOptions.files!['/workspace/service-account-key.json'] = serviceAccount.private_key;
+            }
+
+            // Add GCS mounts
+            if (account.mounts && account.mounts.length > 0) {
+                // runOptions.privileged = true; // GCS FUSE mounts might not require privileged containers with --execution-environment=gen2
+                for (const mount of account.mounts) {
+                    const bucket = account.buckets.find(b => b.id === mount.bucket_id);
+                    if (bucket) {
+                        runOptions.volumes![`gs://${bucket.bucket_name}${mount.gcs_path}`] = mount.container_path;
+                    }
+                }
+            }
+        }
         
         try {
             await this.docker.run(containerName, imageName, runOptions);

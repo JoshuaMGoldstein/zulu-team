@@ -9,6 +9,10 @@ import * as dotenv from 'dotenv';
 import {publicdb, PSQLERROR} from './supabase';
 import {assert, logAssert} from './utils/assert';
 import templatemanager from './templatemanager';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+import { randomUUID } from 'crypto';
 import {Database} from './db/public.types'
 
 dotenv.config();
@@ -22,6 +26,9 @@ class Account {
     public settings: BotSettings = {} as BotSettings;//Object.assign({}, DefaultBotSettings);
     public roles: { [key: string]: BotSettings }= {};
     public gitKeys: any[] = [];
+    public buckets: any[] = [];
+    public mounts: any[] = [];
+    public defaultBucketId: string | null = null;
 }
 
 class ConfigManager {
@@ -127,6 +134,144 @@ class ConfigManager {
         return files;
     }
 
+    private async initializeGCSResources(accountId: string) {
+        // Check for existing service account
+        const { data: existingServiceAccount } = await publicdb
+            .from('service_accounts')
+            .select('*')
+            .eq('account_id', accountId)
+            .single();
+
+        let serviceAccountData = existingServiceAccount;
+
+        if (!existingServiceAccount) {
+            // Create new service account
+            const projectId = process.env.GCP_PROJECT_ID;
+            if (!projectId) {
+                throw new Error("GCP_PROJECT_ID not set in environment variables.");
+            }
+
+            const serviceAccountName = `zulu-bot-${accountId}`;
+            const keyFile = `/tmp/${randomUUID()}.json`;
+
+            // Create service account
+            await execAsync(`gcloud iam service-accounts create ${serviceAccountName} --project=${projectId} --display-name="Zulu Bot Service Account for ${accountId}"`);
+            await execAsync(`gcloud iam service-accounts keys create ${keyFile} --iam-account=${serviceAccountName}@${projectId}.iam.gserviceaccount.com`);
+
+            // Read key file content
+            const keyContent = require('fs').readFileSync(keyFile, 'utf8');
+            const decodedPrivateKey = JSON.parse(keyContent).private_key;
+
+            // Store in database
+            const { data: newServiceAccount, error: serviceAccountError } = await publicdb
+                .from('service_accounts')
+                .insert({
+                    account_id: accountId,
+                    name: serviceAccountName,
+                    private_key: decodedPrivateKey,
+                    client_email: `${serviceAccountName}@${projectId}.iam.gserviceaccount.com`
+                })
+                .select()
+                .single();
+
+            if (serviceAccountError) {
+                throw serviceAccountError;
+            }
+            serviceAccountData = newServiceAccount;
+
+            if (!serviceAccountData) {
+                throw new Error("Failed to retrieve or create service account.");
+            }
+
+            // Clean up key file
+            require('fs').unlinkSync(keyFile);
+        }
+
+        // Check if bucket already exists
+        const { data: existingBucket } = await publicdb
+            .from('buckets')
+            .select('*')
+            .eq('account_id', accountId)
+            .single();
+
+        let bucketData = existingBucket;
+
+        if (!existingBucket) {
+            // Create new bucket
+            const bucketName = `zulu-bot-${accountId}`;
+            const projectId = process.env.GCP_PROJECT_ID;
+            if (!projectId) {
+                throw new Error("GCP_PROJECT_ID not set in environment variables.");
+            }
+
+            await execAsync(`gsutil mb -p ${projectId} gs://${bucketName}`);
+
+            // Grant permissions to service account
+            const serviceAccountEmail = serviceAccountData?.client_email;
+            if (!serviceAccountEmail) {
+                throw new Error("Service account email not found.");
+            }
+            await execAsync(`gsutil iam ch \
+                serviceAccount:${serviceAccountEmail}:roles/storage.objectAdmin \
+                gs://${bucketName}`);
+
+            // Store in database
+            const { data: newBucket, error: bucketError } = await publicdb
+                .from('buckets')
+                .insert({
+                    account_id: accountId,
+                    bucket_name: bucketName
+                })
+                .select()
+                .single();
+
+            if (bucketError) {
+                throw bucketError;
+            }
+            bucketData = newBucket;
+
+            // Update account with default bucket
+            if (newBucket) {
+                await publicdb
+                    .from('accounts')
+                    .update({ default_bucket_id: newBucket.id })
+                    .eq('id', accountId);
+            }
+        }
+
+        return { serviceAccount: serviceAccountData, bucket: bucketData };
+    }
+
+    private async loadAccountBucketsAndMounts(accountId: string, account: Account) {
+        // Load buckets
+        const { data: buckets, error: bucketsError } = await publicdb
+            .from('buckets')
+            .select('*')
+            .eq('account_id', accountId);
+
+        if (bucketsError) throw bucketsError;
+        account.buckets = buckets || [];
+
+        // Load mounts
+        const { data: mounts, error: mountsError } = await publicdb
+            .from('mounts')
+            .select('*')
+            .eq('account_id', accountId);
+
+        if (mountsError) throw mountsError;
+        account.mounts = mounts || [];
+
+        // Get default bucket ID from account settings
+        const { data: accountSettings, error: accountSettingsError } = await publicdb
+            .from('accounts')
+            .select('default_bucket_id')
+            .eq('id', accountId)
+            .single();
+
+        if (accountSettingsError && accountSettingsError.code !== 'PGRST116') throw accountSettingsError;
+        account.defaultBucketId = accountSettings?.default_bucket_id || null;
+    }
+
     public async load() {
         try {
             const { data: models, error } = await publicdb
@@ -164,6 +309,12 @@ class ConfigManager {
         if(!account) account = new Account();
 
         try {
+            // Initialize GCS resources (service account, default bucket)
+            await this.initializeGCSResources(accountId);
+
+            // Load account-specific buckets and mounts
+            await this.loadAccountBucketsAndMounts(accountId, account);
+
             //FIXME: Get bot settings and apply to bot
             const { data: botsettings, error: botSettingsError } = await publicdb
                 .from('bot_settings')
@@ -331,6 +482,17 @@ class ConfigManager {
 
     public async getGitKeys(accountId:string): Promise<any[]> {
         return (await this.getAccount(accountId))?.gitKeys??[];
+    }
+
+    public async getServiceAccount(accountId: string): Promise<any | undefined> {
+        const { data: serviceAccount, error } = await publicdb
+            .from('service_accounts')
+            .select('*')
+            .eq('account_id', accountId)
+            .single();
+
+        if (error && error.code !== 'PGRST116') throw error;
+        return serviceAccount || undefined;
     }
 }
 

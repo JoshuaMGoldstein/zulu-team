@@ -4,6 +4,7 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { Bot, BotEventType, BotOutput, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
 import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
 import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';
@@ -77,16 +78,48 @@ class ApiServer {
         //discordManager.initBots(instanceIds);
     //}
 
-    private createEventFile(instance: Bot, event: BotEvent) {
+    private async createEventFile(instance: Bot, event: BotEvent) {
+        const account = await configManager.getAccount(instance.account_id);
+        if (account?.defaultBucketId) {
+            const bucket = account.buckets.find(b => b.id === account.defaultBucketId);
+            if (bucket) {
+                const gcsPath = `gs://${bucket.bucket_name}/.events/${event.id}.json`;
+                const tempFilePath = `/tmp/${event.id}.json`;
+                fs.writeFileSync(tempFilePath, JSON.stringify(event, null, 2));
+                await execAsync(`gsutil cp ${tempFilePath} ${gcsPath}`);
+                fs.unlinkSync(tempFilePath);
+                log(`Event file uploaded to GCS: ${gcsPath}`);
+                return;
+            }
+        }
+
+        // Fallback to local file system if no default bucket or bucket not found
         const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
         if (!fs.existsSync(eventsDir)) {
             fs.mkdirSync(eventsDir, { recursive: true });
         }
         const eventFilePath = path.join(eventsDir, `${event.id}.json`);
         fs.writeFileSync(eventFilePath, JSON.stringify(event, null, 2));
+        log(`Event file created locally: ${eventFilePath}`);
     }
 
-    private writeLogEntry(instance: Bot, logFilename: string, event: BotOutput) {
+    private async writeLogEntry(instance: Bot, logFilename: string, event: BotOutput) {
+        const account = await configManager.getAccount(instance.account_id);
+        if (account?.defaultBucketId) {
+            const bucket = account.buckets.find(b => b.id === account.defaultBucketId);
+            if (bucket) {
+                const gcsPath = `gs://${bucket.bucket_name}/.logs/${logFilename}`;
+                const logEntry = JSON.stringify(event) + '\n';
+                const tempFilePath = `/tmp/${randomUUID()}.jsonl`;
+                fs.writeFileSync(tempFilePath, logEntry);
+                await execAsync(`gsutil cp ${tempFilePath} ${gcsPath}`);
+                fs.unlinkSync(tempFilePath);
+                log(`Log entry appended to GCS: ${gcsPath}`);
+                return;
+            }
+        }
+
+        // Fallback to local file system if no default bucket or bucket not found
         const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
         if (!fs.existsSync(logsDir)) {
             fs.mkdirSync(logsDir, { recursive: true });
@@ -94,6 +127,7 @@ class ApiServer {
         const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
         logStream.write(JSON.stringify(event) + '\n');
         logStream.end();
+        log(`Log entry written locally: ${path.join(logsDir, logFilename)}`);
     }
 
     private async getVerbosity(instance: Bot, event: BotEvent): Promise<Verbosity> {

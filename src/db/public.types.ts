@@ -175,35 +175,35 @@ export type Database = {
       bot_settings: {
         Row: {
           account_id: string
-          allow_delegation: boolean
+          allow_delegation: number
           channel_verbosity: number
           created_at: string
           delegated_verbosity: number
           dm_verbosity: number
           instance_id: string
-          mount_bot_instances: boolean
+          mount_bot_instances: number
           updated_at: string
         }
         Insert: {
           account_id: string
-          allow_delegation?: boolean
+          allow_delegation?: number
           channel_verbosity?: number
           created_at?: string
           delegated_verbosity?: number
           dm_verbosity?: number
           instance_id?: string
-          mount_bot_instances?: boolean
+          mount_bot_instances?: number
           updated_at?: string
         }
         Update: {
           account_id?: string
-          allow_delegation?: boolean
+          allow_delegation?: number
           channel_verbosity?: number
           created_at?: string
           delegated_verbosity?: number
           dm_verbosity?: number
           instance_id?: string
-          mount_bot_instances?: boolean
+          mount_bot_instances?: number
           updated_at?: string
         }
         Relationships: [
@@ -698,7 +698,7 @@ export type Database = {
       roles: {
         Row: {
           account_id: string
-          allow_delegation: boolean | null
+          allow_delegation: number
           channel_verbosity: number | null
           created_at: string | null
           delegated_verbosity: number | null
@@ -706,14 +706,14 @@ export type Database = {
           dm_verbosity: number | null
           id: string
           md: string | null
-          mount_bot_instances: boolean | null
+          mount_bot_instances: number
           name: string | null
           public: boolean
           updated_at: string | null
         }
         Insert: {
           account_id: string
-          allow_delegation?: boolean | null
+          allow_delegation?: number
           channel_verbosity?: number | null
           created_at?: string | null
           delegated_verbosity?: number | null
@@ -721,14 +721,14 @@ export type Database = {
           dm_verbosity?: number | null
           id?: string
           md?: string | null
-          mount_bot_instances?: boolean | null
+          mount_bot_instances?: number
           name?: string | null
           public?: boolean
           updated_at?: string | null
         }
         Update: {
           account_id?: string
-          allow_delegation?: boolean | null
+          allow_delegation?: number
           channel_verbosity?: number | null
           created_at?: string | null
           delegated_verbosity?: number | null
@@ -736,7 +736,7 @@ export type Database = {
           dm_verbosity?: number | null
           id?: string
           md?: string | null
-          mount_bot_instances?: boolean | null
+          mount_bot_instances?: number
           name?: string | null
           public?: boolean
           updated_at?: string | null
@@ -755,13 +755,14 @@ export type Database = {
         Row: {
           account_id: string
           auth_provider_x509_cert_url: string
-          auth_url: string
+          auth_uri: string
           client_email: string
           client_id: string
           client_x509_cert_url: string
           created_at: string
           id: string
           private_key: string
+          private_key_id: string
           project_id: string
           token_uri: string
           type: string
@@ -770,13 +771,14 @@ export type Database = {
         Insert: {
           account_id: string
           auth_provider_x509_cert_url?: string
-          auth_url?: string
+          auth_uri?: string
           client_email: string
-          client_id?: string
+          client_id: string
           client_x509_cert_url?: string
           created_at?: string
           id?: string
           private_key: string
+          private_key_id: string
           project_id?: string
           token_uri?: string
           type?: string
@@ -785,13 +787,14 @@ export type Database = {
         Update: {
           account_id?: string
           auth_provider_x509_cert_url?: string
-          auth_url?: string
+          auth_uri?: string
           client_email?: string
           client_id?: string
           client_x509_cert_url?: string
           created_at?: string
           id?: string
           private_key?: string
+          private_key_id?: string
           project_id?: string
           token_uri?: string
           type?: string

@@ -19,6 +19,14 @@ app.use(express.static('public'));
 const AUTH_HEADER = 'Authorization';
 const BEARER_PREFIX = 'Bearer ';
 
+// Map usernames to UIDs and GIDs
+const userMap = {
+    'exec': { uid: 1001, gid: 2000, path: '/home/exec/.npm-global/bin', home: '/home/exec' },
+    'git': { uid: 1002, gid: 2000, home: '/home/git' },        
+    'root': {uid: 0, gid: 0, home: '/root'}
+};
+
+
 function requireAuth(req, res, next) {
     // Check Authorization header first
     const authHeader = req.headers[AUTH_HEADER.toLowerCase()];
@@ -41,6 +49,8 @@ function requireAuth(req, res, next) {
     
     return res.status(401).json({ error: 'Missing or invalid authorization' });
 }
+
+
 
 // Ensure workspace directory exists
 const WORKSPACE_DIR = '/workspace';
@@ -97,12 +107,14 @@ function setupWorkspace(files, username = 'exec') {
 
     try {
         // Map usernames to UIDs and GIDs
-        const userMap = {
-            'exec': { uid: 1001, gid: 1001 },
-            'git': { uid: 1002, gid: 1002 }
-        };
         
-        const userInfo = userMap[username] || { uid: 1001, gid: 1001 };
+        const userInfo = userMap[username]; // || { uid: 1001, gid: 1001 };
+        if(!userInfo) {
+            console.log("user not found: "+username);
+            return;
+        }
+
+        const homeDir = userInfo.home;
 
         // Ensure workspace directory exists
         if (!fs.existsSync(WORKSPACE_DIR)) {
@@ -115,10 +127,17 @@ function setupWorkspace(files, username = 'exec') {
             let fullPath;
             let targetDir;
             
+            
+
             // Handle home directory files
-            if (filePath.startsWith('~/')) {
-                const homeDir = username === 'git' ? '/home/git' : '/home/exec';
-                const relativePath = filePath.substring(2); // Remove '~/'
+            if (filePath.startsWith('~/') || filePath.startsWith(homeDir)) {
+                
+                const relativePath = filePath.startsWith('~/') ? filePath.substring(2) : filePath.substring(homeDir.length); // Remove '~/' or 'homedir'
+                const normalizedPath = path.normalize(relativePath);
+                if(normalizedPath.indexOf('..')>=0) {
+                    console.log(" path contained bad characters", relativePath);
+                    return;
+                }
                 fullPath = path.join(homeDir, relativePath);
                 targetDir = path.dirname(fullPath);
                 
@@ -150,14 +169,20 @@ function setupWorkspace(files, username = 'exec') {
                     fs.chownSync(fullPath, userInfo.uid, userInfo.gid);
                 }
             } else {
+                const normalizedPath = path.normalize(filePath);
+                if(normalizedPath.indexOf('..')>=0) {
+                    console.log("path contained bad characters: ", filePath);
+                    return;
+                }
+
                 // Regular workspace file
-                if (filePath.startsWith(WORKSPACE_DIR+'/')) {
-                    fullPath = filePath;
-                } else if (filePath.startsWith('/')) {
+                if (normalizedPath.startsWith(WORKSPACE_DIR+'/')) {
+                    fullPath = normalizedPath;
+                } else if (normalizedPath.startsWith('/')) {
                     // Other absolute paths - prepend workspace
-                    fullPath = path.join(WORKSPACE_DIR, filePath.substring(1));
+                    fullPath = path.join(WORKSPACE_DIR, normalizedPath.substring(1));
                 } else {
-                    fullPath = path.join(WORKSPACE_DIR, filePath);
+                    fullPath = path.join(WORKSPACE_DIR, normalizedPath);
                 }
                 targetDir = path.dirname(fullPath);
                 
@@ -185,13 +210,12 @@ function setupWorkspace(files, username = 'exec') {
 function spawnCommand(command, args, env, clientId, ws = null, username = 'exec', clientPid = null, stdinContent = null) {
     console.log(`Spawning command: ${command} ${args.join(' ')} for client: ${clientId} as user: ${username}`);
     
-    // Map usernames to UIDs and GIDs
-    const userMap = {
-        'exec': { uid: 1001, gid: 2000, path: '/home/exec/.npm-global/bin', home: '/home/exec' },
-        'git': { uid: 1002, gid: 2000, home: '/home/git' }
-    };
     
-    const userInfo = userMap[username] || { uid: 1001, gid: 2000, path: '/home/exec/.npm-global/bin', home: '/home/exec' };
+    const userInfo = userMap[username];
+    if(!userInfo) {
+        console.log("user not found: "+username);
+        return;
+    }
     
     // Filter out sensitive environment variables for non-root users
     const processEnv = { 
@@ -201,15 +225,15 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         HOME: userInfo.home,
         XDG_CONFIG_HOME: userInfo.home + '/.config'
     };
-    if (username !== 'root') {
+    //if (username !== 'root') {
         delete processEnv.EXEC_TOKEN;
-    }
+    //}
     const childProcess = spawn(command, args, {
         cwd: WORKSPACE_DIR,
         env: processEnv,
         shell: true,
-        uid: userInfo.uid,
-        gid: userInfo.gid,
+        uid: userInfo.uid>0?userInfo.uid:undefined,
+        gid: userInfo.gid>0?userInfo.gid:undefined,
         stdio: ['pipe', 'pipe', 'pipe']
     });
 
@@ -287,8 +311,8 @@ app.post('/exec', requireAuth, (req, res) => {
         return res.status(400).json({ error: 'clientid and command are required' });
     }
 
-    if (!['exec', 'git'].includes(user)) {
-        return res.status(400).json({ error: 'user must be either "exec" or "git"' });
+    if (!['exec', 'git', 'root'].includes(user)) {
+        return res.status(400).json({ error: 'user must be either "exec" or "git" or "root"' });
     }
 
     try {
@@ -362,8 +386,8 @@ wss.on('connection', (ws, req) => {
                     return;
                 }
 
-                if (!['exec', 'git'].includes(user)) {
-                    ws.send(JSON.stringify({ error: 'user must be either "exec" or "git"' }));
+                if (!['exec', 'git', 'root'].includes(user)) {
+                    ws.send(JSON.stringify({ error: 'user must be either "exec" or "git" or "root"' }));
                     return;
                 }
 

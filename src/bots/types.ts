@@ -90,15 +90,22 @@ export enum Verbosity {
     INHERIT = -1,
     NONE = 0,    
     STDOUT = 1,
-    TOOLHOOKS = 2
+    TOOLHOOKS = 2,
+    TOOLHOOKS_AND_STDOUT=3
+}
+
+export enum InheritedBoolean {
+    INHERIT = -1,
+    FALSE = 0,
+    TRUE = 1
 }
 
 export interface BotSettings {
     dmVerbosity:Verbosity
     channelVerbosity:Verbosity
     delegatedVerbosity:Verbosity
-    mountBotInstances: boolean;
-    allowDelegation: boolean;
+    mountBotInstances?:InheritedBoolean;
+    allowDelegation?:InheritedBoolean;
 }
 
 enum BotEventSource {

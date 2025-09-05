@@ -17,12 +17,18 @@ import { STDERR_FILTERS } from './utils/filters';
 import { generateEventId } from './utils/snowflake';
 import { parseCodeBlocks } from './utils/parsers';
 import configManager from './configmanager';
+import gcsUtil from './utils/gs';
 
 import {BotEvent,DiscordBotEvent,DelegationBotEvent} from './bots/types';
 import dockermanager from './dockermanager';
+import workflowManager from './workflowmanager';
 
 const MAX_ATTEMPTS = 5;
 
+// Log buffer for GCS uploads
+const logBuffer = new Map<string, string[]>();
+const LOG_FLUSH_INTERVAL = 5000; // Flush every 5 seconds
+let flushInterval: NodeJS.Timeout;
 
 class ApiServer {
     private app: express.Application;
@@ -32,7 +38,28 @@ class ApiServer {
         this.app.use(express.json());
         this.app.use(this.authenticateToken.bind(this));
         this.setupRoutes();
+
+        // Start log flushing interval
+        flushInterval = setInterval(() => this.flushLogs(), LOG_FLUSH_INTERVAL);
     }
+
+    private async flushLogs() {
+        for (const [key, entries] of logBuffer.entries()) {
+            const [instanceId, logFilename, bucketName] = key.split('|');
+            if (entries.length > 0) {
+                const dataToFlush = entries.join('');
+                const gcsPath = `bot-instances/${instanceId}/.logs/${logFilename}`;
+                try {
+                    await gcsUtil.appendData(dataToFlush, bucketName, gcsPath);
+                    log(`Flushed ${entries.length} log entries to GCS: ${gcsPath}`);
+                    logBuffer.set(key, []); // Clear the buffer for this key
+                } catch (error) {
+                    console.error(`Error flushing logs to GCS for ${gcsPath}:`, error);
+                }
+            }
+        }
+    }
+
     static GetAccountId(req:express.Request):string {
         return (req as any).account_id;
     }
@@ -83,24 +110,25 @@ class ApiServer {
         if (account?.defaultBucketId) {
             const bucket = account.buckets.find(b => b.id === account.defaultBucketId);
             if (bucket) {
-                const gcsPath = `gs://${bucket.bucket_name}/.events/${event.id}.json`;
-                const tempFilePath = `/tmp/${event.id}.json`;
-                fs.writeFileSync(tempFilePath, JSON.stringify(event, null, 2));
-                await execAsync(`gsutil cp ${tempFilePath} ${gcsPath}`);
-                fs.unlinkSync(tempFilePath);
+                const gcsPath = `gs://${bucket.bucket_name}/bot-instances/${instance.id}/.events/${event.id}.json`;
+                const eventData = JSON.stringify(event, null, 2);
+                
+                // Use GCS utility to upload data directly without temp file
+                await gcsUtil.uploadData(eventData, bucket.bucket_name, `bot-instances/${instance.id}/.events/${event.id}.json`);
+                
                 log(`Event file uploaded to GCS: ${gcsPath}`);
                 return;
             }
         }
 
         // Fallback to local file system if no default bucket or bucket not found
-        const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
+        /*const eventsDir = path.join(__dirname, `../bot-instances/${instance.id}/.events`);
         if (!fs.existsSync(eventsDir)) {
             fs.mkdirSync(eventsDir, { recursive: true });
         }
         const eventFilePath = path.join(eventsDir, `${event.id}.json`);
         fs.writeFileSync(eventFilePath, JSON.stringify(event, null, 2));
-        log(`Event file created locally: ${eventFilePath}`);
+        log(`Event file created locally: ${eventFilePath}`);*/
     }
 
     private async writeLogEntry(instance: Bot, logFilename: string, event: BotOutput) {
@@ -108,26 +136,27 @@ class ApiServer {
         if (account?.defaultBucketId) {
             const bucket = account.buckets.find(b => b.id === account.defaultBucketId);
             if (bucket) {
-                const gcsPath = `gs://${bucket.bucket_name}/.logs/${logFilename}`;
                 const logEntry = JSON.stringify(event) + '\n';
-                const tempFilePath = `/tmp/${randomUUID()}.jsonl`;
-                fs.writeFileSync(tempFilePath, logEntry);
-                await execAsync(`gsutil cp ${tempFilePath} ${gcsPath}`);
-                fs.unlinkSync(tempFilePath);
-                log(`Log entry appended to GCS: ${gcsPath}`);
+                const key = `${instance.id}|${logFilename}|${bucket.bucket_name}`;
+                
+                if (!logBuffer.has(key)) {
+                    logBuffer.set(key, []);
+                }
+                logBuffer.get(key)?.push(logEntry);
+                log(`Buffered log entry for GCS: ${key}`);
                 return;
             }
         }
 
         // Fallback to local file system if no default bucket or bucket not found
-        const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
+        /*const logsDir = path.join(__dirname, `../bot-instances/${instance.id}/.logs`);
         if (!fs.existsSync(logsDir)) {
             fs.mkdirSync(logsDir, { recursive: true });
         }
         const logStream = fs.createWriteStream(path.join(logsDir, logFilename), { flags: 'a' });
         logStream.write(JSON.stringify(event) + '\n');
         logStream.end();
-        log(`Log entry written locally: ${path.join(logsDir, logFilename)}`);
+        log(`Log entry written locally: ${path.join(logsDir, logFilename)}`);*/
     }
 
     private async getVerbosity(instance: Bot, event: BotEvent): Promise<Verbosity> {
@@ -272,6 +301,7 @@ class ApiServer {
         const developer = (await configManager.getInstances(originalEvent.account_id)).find(i => i.id === originalEvent.assignedTo);
 
     
+
         
         const nextEvent = new DelegationBotEvent({
             account_id:originalEvent.account_id,
@@ -286,7 +316,11 @@ class ApiServer {
             attempts: (originalEvent.attempts || 0) + 1,
         });
 
-
+        //Check for whether the bot committed code on the correct branch.
+        //if (project && originalEvent.branch) {
+        //    let pushSuccess:boolean = await dockerManager.runGitWorkflow('push-branch', fromInstance, project, originalEvent.branch);
+        //}
+        //Check for committed code on the correct branch, and push it        
 
         // 1. Handle problems
         if (!project || responseJson.task_status === 'problem') {

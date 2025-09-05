@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Model,Bot, Project, BotSettings } from './bots/types';
+import { Model,Bot, Project, BotSettings, InheritedBoolean, Verbosity } from './bots/types';
 import {log} from './utils/log'
 import { env } from 'process';
 import { stringify } from 'querystring';
@@ -13,7 +13,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
 import { randomUUID } from 'crypto';
-import {Database} from './db/public.types'
+import {Database} from './db/public.types';
+import gcsUtil from './utils/gs';
 
 dotenv.config();
 
@@ -134,6 +135,12 @@ class ConfigManager {
         return files;
     }
 
+    private uuidToBase36(uuid: string): string {
+        const cleanUuid = uuid.replace(/-/g, '');
+        const bigIntUuid = BigInt(`0x${cleanUuid}`);
+        return bigIntUuid.toString(36).toUpperCase();
+    }
+
     private async initializeGCSResources(accountId: string) {
         // Check for existing service account
         const { data: existingServiceAccount } = await publicdb
@@ -151,40 +158,47 @@ class ConfigManager {
                 throw new Error("GCP_PROJECT_ID not set in environment variables.");
             }
 
-            const serviceAccountName = `zulu-bot-${accountId}`;
-            const keyFile = `/tmp/${randomUUID()}.json`;
+            const serviceAccountName = 'acct'+this.uuidToBase36(`${accountId}`);
+            const serviceAcctEmail = `${serviceAccountName}@${projectId}.iam.gserviceaccount.com`;
 
-            // Create service account
-            await execAsync(`gcloud iam service-accounts create ${serviceAccountName} --project=${projectId} --display-name="Zulu Bot Service Account for ${accountId}"`);
-            await execAsync(`gcloud iam service-accounts keys create ${keyFile} --iam-account=${serviceAccountName}@${projectId}.iam.gserviceaccount.com`);
+            try { 
+                // Create service account using GCS utility
+                await gcsUtil.createServiceAccount(serviceAccountName, `Zulu Bot Service Account for ${accountId}`);
+                
+                // Create key using GCS utility and get key data directly
+                const keyData = await gcsUtil.createServiceAccountKey(serviceAcctEmail);
 
-            // Read key file content
-            const keyContent = require('fs').readFileSync(keyFile, 'utf8');
-            const decodedPrivateKey = JSON.parse(keyContent).private_key;
+                // Store in database
+                const { data: newServiceAccount, error: serviceAccountError } = await publicdb
+                    .from('service_accounts')
+                    .insert({
+                        account_id: accountId,                        
+                        private_key: keyData.private_key,
+                        private_key_id: keyData.private_key_id,
+                        client_id: keyData.client_id,
+                        client_email: serviceAcctEmail
+                    })
+                    .select()
+                    .single();
 
-            // Store in database
-            const { data: newServiceAccount, error: serviceAccountError } = await publicdb
-                .from('service_accounts')
-                .insert({
-                    account_id: accountId,
-                    name: serviceAccountName,
-                    private_key: decodedPrivateKey,
-                    client_email: `${serviceAccountName}@${projectId}.iam.gserviceaccount.com`
-                })
-                .select()
-                .single();
+                if (serviceAccountError) {
+                    throw serviceAccountError;
+                }
+                serviceAccountData = newServiceAccount;
 
-            if (serviceAccountError) {
-                throw serviceAccountError;
+                if (!serviceAccountData) {
+                    throw new Error("Failed to retrieve or create service account.");                    
+                }
+            } catch(e) {
+                // Clean up key file and delete service account
+                try {
+                    await gcsUtil.deleteServiceAccount(serviceAcctEmail);
+                } catch (cleanupError) {
+                    console.error('Error cleaning up service account:', cleanupError);
+                }
+                throw e;
             }
-            serviceAccountData = newServiceAccount;
 
-            if (!serviceAccountData) {
-                throw new Error("Failed to retrieve or create service account.");
-            }
-
-            // Clean up key file
-            require('fs').unlinkSync(keyFile);
         }
 
         // Check if bucket already exists
@@ -197,23 +211,22 @@ class ConfigManager {
         let bucketData = existingBucket;
 
         if (!existingBucket) {
-            // Create new bucket
+            // Create new bucket using GCS utility
             const bucketName = `zulu-bot-${accountId}`;
             const projectId = process.env.GCP_PROJECT_ID;
             if (!projectId) {
                 throw new Error("GCP_PROJECT_ID not set in environment variables.");
             }
 
-            await execAsync(`gsutil mb -p ${projectId} gs://${bucketName}`);
+            await gcsUtil.createBucket(bucketName);
 
-            // Grant permissions to service account
+            // Grant permissions to service account using GCS utility
             const serviceAccountEmail = serviceAccountData?.client_email;
             if (!serviceAccountEmail) {
                 throw new Error("Service account email not found.");
             }
-            await execAsync(`gsutil iam ch \
-                serviceAccount:${serviceAccountEmail}:roles/storage.objectAdmin \
-                gs://${bucketName}`);
+            
+            await gcsUtil.addBucketIamPolicy(bucketName, `serviceAccount:${serviceAccountEmail}`, 'roles/storage.objectAdmin');
 
             // Store in database
             const { data: newBucket, error: bucketError } = await publicdb
@@ -304,6 +317,65 @@ class ConfigManager {
             console.log("Error loading models");
          }
     }
+    private async syncBotInstancesFiles(accountId: string, account: Account) {
+        try {
+            // Get the default bucket for this account
+            const defaultBucket = account.buckets.find(b => b.id === account.defaultBucketId);
+            if (!defaultBucket) {
+                console.log(`No default bucket found for account ${accountId}`);
+                return;
+            }
+
+            const bucketName = defaultBucket.bucket_name;
+            
+            // Create instances.json content
+            const instancesData = account.instances.map(instance => ({
+                id: instance.id,
+                name: instance.name,
+                bot_id: instance.bot_id,
+                role: instance.role,
+                image: instance.imageName,
+                cli: instance.cli,
+                model: instance.model,
+                preset: instance.preset,
+                enabled: instance.enabled,
+                managed_projects: instance.managedProjects,
+                working_directory: instance.workingDirectory
+            }));
+
+            // Create projects.json content
+            const projectsData = account.projects.map(project => ({
+                id: project.id,
+                name: project.name,
+                description: project.description,
+                repository_url: project.repositoryUrl,
+                assigned_qa: project.assignedQa,
+                discord_channel_ids: project.discordChannelIds,
+                created_at: project.createdAt,
+                updated_at: project.updatedAt
+            }));
+
+            // Upload to GCS using pipe capability
+            await gcsUtil.uploadData(
+                JSON.stringify(instancesData, null, 2),
+                bucketName,
+                'bot-instances/instances.json'
+            );
+
+            await gcsUtil.uploadData(
+                JSON.stringify(projectsData, null, 2),
+                bucketName,
+                'bot-instances/projects.json'
+            );
+
+            console.log(`✅ Synced bot-instances files to GCS bucket ${bucketName}`);
+
+        } catch (error) {
+            console.error('Error syncing bot-instances files to GCS:', error);
+            // Don't throw - this is non-critical
+        }
+    }
+
     public async loadUpdateAccount(accountId:string):Promise<Account> {
         let account = this.accounts.get(accountId);
         if(!account) account = new Account();
@@ -314,6 +386,8 @@ class ConfigManager {
 
             // Load account-specific buckets and mounts
             await this.loadAccountBucketsAndMounts(accountId, account);
+
+            
 
             //FIXME: Get bot settings and apply to bot
             const { data: botsettings, error: botSettingsError } = await publicdb
@@ -330,8 +404,8 @@ class ConfigManager {
                 delegatedVerbosity: x.delegated_verbosity || -1,
                 dmVerbosity: x.dm_verbosity || -1,
                 channelVerbosity: x.channel_verbosity || -1,
-                mountBotInstances: x.mount_bot_instances || false,
-                allowDelegation: x.allow_delegation || false
+                mountBotInstances: x.mount_bot_instances || InheritedBoolean.INHERIT,
+                allowDelegation: x.allow_delegation || InheritedBoolean.INHERIT
                 }
                 return mappedBotSettings;
             },
@@ -363,7 +437,7 @@ class ConfigManager {
                         //discordBotToken: inst.discord_bot_token || '',
                         //discordChannelId: inst.discord_channel_id || '',
                         managedProjects: inst.managed_projects.split(',').map(p=>p.trim()) || [],
-                        settings: mappedBotSettings[inst.id],
+                        settings: mappedBotSettings[inst.id] ?? { dmVerbosity:-1, channelVerbosity: -1, delegatedVerbosity: -1},
                         files: await this.generateFilesForInstance(inst),
                         env: this.generateEnvForInstance(inst),
                         lastActivity: inst.updated_at || new Date().toISOString(),
@@ -391,6 +465,9 @@ class ConfigManager {
                 createdAt: project.created_at || new Date().toISOString(),
                 updatedAt: project.updated_at || new Date().toISOString()
             })) as Project[];
+
+            // Sync bot-instances folder with projects.json and instances.json after populating them
+            await this.syncBotInstancesFiles(accountId, account);
 
             // Get settings
             const { data: settings, error: settingsError } = await publicdb
@@ -458,6 +535,30 @@ class ConfigManager {
             }
         }
         return account;
+    }
+
+    public mergeSettings(settings:any[]):any {
+        let finalSettings = settings[settings.length-1];
+        for(var i=settings.length-1; i>=0; i--) {
+            let keys = Object.keys(settings[i]);
+            for(var k=0; k<keys.length; k++) {
+                let key = keys[k];
+                if(settings[i][key]!=-1) {
+                    finalSettings[key] = settings[i][key];
+                }
+            }
+        }
+        return finalSettings;
+    }
+
+    public async getBotInstanceAppliedSettings(instance:Bot):Promise<BotSettings> {
+        let botSettings:BotSettings = instance.settings ?? { dmVerbosity:Verbosity.INHERIT,channelVerbosity:Verbosity.INHERIT,delegatedVerbosity:Verbosity.INHERIT};
+        let roles = await this.getRoles(instance.account_id);
+        let roleSettings:BotSettings = roles[instance.role] ?? { dmVerbosity:Verbosity.INHERIT,channelVerbosity:Verbosity.INHERIT,delegatedVerbosity:Verbosity.INHERIT};
+        
+        let globalSettings:BotSettings = await this.getSettings(instance.account_id)?? { dmVerbosity:Verbosity.TOOLHOOKS_AND_STDOUT,channelVerbosity:Verbosity.TOOLHOOKS_AND_STDOUT,delegatedVerbosity:Verbosity.STDOUT};
+        let appliedSettings = this.mergeSettings([botSettings,roleSettings,globalSettings]);
+        return appliedSettings;
     }
 
     public async getInstances(accountId:string): Promise<Bot[]> {        

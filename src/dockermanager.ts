@@ -65,33 +65,13 @@ class DockerManager {
     private async startBotContainer(instance: Bot) {        
         const imageName = instance.cli === 'gemini' ? 'gemini-docker' : 'claude-docker';
         const containerName = this.getContainerName(instance);
-        
-        const account = await configManager.getAccount(instance.account_id);
+                
         const runOptions: RunOptions = {
             files: { ...instance.files },
             env: instance.env,
             volumes: {},
             privileged: false,
-        };
-
-        if (account) {
-            // Add service account key if available
-            const serviceAccount = await configManager.getServiceAccount(instance.account_id);
-            if (serviceAccount?.private_key) {
-                runOptions.files!['/workspace/service-account-key.json'] = serviceAccount.private_key;
-            }
-
-            // Add GCS mounts
-            if (account.mounts && account.mounts.length > 0) {
-                // runOptions.privileged = true; // GCS FUSE mounts might not require privileged containers with --execution-environment=gen2
-                for (const mount of account.mounts) {
-                    const bucket = account.buckets.find(b => b.id === mount.bucket_id);
-                    if (bucket) {
-                        runOptions.volumes![`gs://${bucket.bucket_name}${mount.gcs_path}`] = mount.container_path;
-                    }
-                }
-            }
-        }
+        }; 
         
         try {
             await this.docker.run(containerName, imageName, runOptions);
@@ -99,7 +79,17 @@ class DockerManager {
         } catch (error) {
             log(`Error starting container ${containerName}:`, error);
         }
-    }    
+
+        try {
+            const contexts = await workflowManager.buildGCSFuseContexts(this.docker, containerName, instance);
+            for(var context of contexts) {
+                await workflowManager.executeWorkflow('mount-gcs', context);
+            }
+            log(`Container: ${containerName}  GCSFuse Mount Setup Complete.`);
+        } catch (error) {
+            log(`Container: ${containerName} - Error during GCSFuse Mount Setup `, error);            
+        }
+    }
 
     private getContainerName(instance:Bot) {
         return  `${instance.account_id}-zulu-instance-${instance.id}`;
@@ -277,6 +267,18 @@ class DockerManager {
         });
         this.activationQueue.set(instance.id, queued);
         return queued;
+    }
+
+    public async runGitWorkflow(workflowName:string, fromInstance:Bot, project:Project, branch?:string):Promise<boolean> {
+        let containerName = this.getContainerName(fromInstance);
+        try {
+            let context = await workflowManager.buildGitContext(this.docker,containerName, project, branch);
+            await workflowManager.executeWorkflow(workflowName, context);
+            return true;
+        } catch(e) {
+            return false;
+        }
+        
     }
 
     private createEventListeners(child:IChildProcess, instanceId:string, eventId:string, resolve:(value: BotOutput | PromiseLike<BotOutput>) => void, reject:(reason?:any)=>void, statusMessage?: Message) {

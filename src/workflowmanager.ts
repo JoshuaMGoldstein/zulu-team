@@ -1,8 +1,12 @@
+import { envsubParser, SYNTAX } from './utils/envsub';
 import * as fs from 'fs';
 import * as path from 'path';
 import { log } from './utils/log';
 import { IDocker, ExecOptions } from './utils/idocker';
 import { publicdb } from './supabase';
+import {Bot} from './bots/types'
+import configManager from './configmanager'
+import { config } from 'dotenv';
 
 export interface WorkflowStep {
   type: 'ARG' | 'USER' | 'ENV' | 'COPY' | 'WORKDIR' | 'RUN';
@@ -29,6 +33,82 @@ export class WorkflowManager {
       fs.mkdirSync(this.workflowsPath, { recursive: true });
     }
   }
+
+  /**
+   * Build a context for GCSFuse mounting with all necessary arguments and files
+   **/
+  public async buildGCSFuseContexts(docker:IDocker, containerName: string, instance: Bot): Promise<WorkflowContext[]> {
+        const account = await configManager.getAccount(instance.account_id);
+        if(!account) throw new Error("Account not found "+instance.account_id);
+
+        const serviceAccount = await configManager.getServiceAccount(instance.account_id);
+
+        if(!account.defaultBucketId) throw new Error ("Account "+instance.account_id + " has no default bucket -- cannot build GCSFuseContext");
+
+        let bucket = account.buckets?.find(x=>x.id == account.defaultBucketId);
+
+        if(!bucket) throw new Error (`Default bucket ${account.defaultBucketId} not found for account ${instance.account_id}`);
+        
+        let cxt = {
+          user: "root",
+          files: {
+            'service-account-key.json': JSON.stringify(serviceAccount)         // Add service account key
+          },
+          args: {},
+          containerName: containerName,
+          workdir: '/root',
+          docker: docker,
+          env: {
+            "GOOGLE_APPLICATION_CREDENTIALS": "/root/service-account-key.json"
+          }
+        };
+
+        let cxts = [];
+
+
+        //Always mount the homedir/.gemini folder for the bot so we can have conversation histories stored.
+        
+        const args = {
+          ACCOUNT_ID: instance.account_id,
+          BUCKET_NAME: bucket.bucket_name,
+          SUB_PATH: `bot-instances/${instance.id}/homedir/.gemini`,
+          MOUNT_POINT: "/home/exec/.gemini",
+          READ_ONLY: ""
+        }
+        
+        cxt.args = args;
+        cxts.push(cxt);
+
+        //Mount default bucket for both RO Access to bot-instances - IF the bot has this privilege
+        let appliedSettings = await configManager.getBotInstanceAppliedSettings(instance);
+        if(appliedSettings.mountBotInstances) {
+          const args2: Record<string, string> = {
+            ACCOUNT_ID: instance.account_id,
+            BUCKET_NAME: bucket.bucket_name,
+            SUB_PATH: "bot-instances",
+            MOUNT_POINT: "/workspace/bot-instances",
+            READ_ONLY: "true"          
+          };
+          const cxt2 = Object.assign({}, cxt);
+          cxt2.args = args2;
+          cxts.push(cxt2);
+        }
+
+
+        // Add GCS mounts
+        /*if (account.mounts && account.mounts.length > 0) {
+            // runOptions.privileged = true; // GCS FUSE mounts might not require privileged containers with --execution-environment=gen2
+            for (const mount of account.mounts) {
+                const bucket = account.buckets.find(b => b.id === mount.bucket_id);
+                if (bucket) {
+                    execOptions.volumes![`gs://${bucket.bucket_name}${mount.gcs_path}`] = mount.container_path;
+                }
+            }
+        }*/
+
+        return cxts;
+  }
+
 
   /**
    * Build a context for Git-based workflows with all necessary arguments and files
@@ -136,11 +216,14 @@ export class WorkflowManager {
         continue;
       }
       
-      const [command, ...args] = trimmedLine.split(/\s+/);
+      const firstSpaceIndex = trimmedLine.indexOf(' ');
+      const command = firstSpaceIndex === -1 ? trimmedLine : trimmedLine.substring(0, firstSpaceIndex);
+      const rawArgs = firstSpaceIndex === -1 ? '' : trimmedLine.substring(firstSpaceIndex + 1).trim();
+
       if (command) {
         steps.push({
           type: command.toUpperCase() as WorkflowStep['type'],
-          args
+          args: [rawArgs] // Store as a single raw argument string
         });
       }
     }
@@ -149,22 +232,11 @@ export class WorkflowManager {
   }
 
   /**
-   * Substitute variables in a string
+   * Substitute variables in a string using envsubParser
    */
   private substituteVariables(str: string, context: WorkflowContext): string {
-    // Substitute ARG variables
-    for (const [key, value] of Object.entries(context.args)) {
-      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
-      str = str.replace(regex, value);
-    }
-    
-    // Substitute environment variables
-    for (const [key, value] of Object.entries(context.env)) {
-      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
-      str = str.replace(regex, value);
-    }
-    
-    return str;
+    const variables = { ...context.env, ...context.args };
+    return envsubParser(str, { options: { env: variables, syntax: SYNTAX.DOLLAR_BOTH } });
   }
 
   /**
@@ -212,14 +284,25 @@ export class WorkflowManager {
    * Execute a single workflow step
    */
   private async executeStep(step: WorkflowStep, context: WorkflowContext): Promise<void> {
-    log(`Executing step: ${step.type} ${step.args.join(' ')}`);
     
-    // Create a copy of the step with substituted variables
-    const substitutedArgs = step.args.map(arg => this.substituteVariables(arg, context));
+    
+    const rawArgs = step.args[0] || ''; // Get the single raw argument string
+    let finalArgs: string[];
+
+    // Apply substitution only for specific step types
+    if (['ARG', 'ENV', 'COPY', 'WORKDIR'].includes(step.type)) {
+      const substitutedRawArgs = this.substituteVariables(rawArgs, context);
+      finalArgs = substitutedRawArgs.split(/\s+/).filter(arg => arg !== '');
+    } else {
+      finalArgs = rawArgs.split(/\s+/).filter(arg => arg !== '');
+    }
+
     const substitutedStep: WorkflowStep = {
       type: step.type,
-      args: substitutedArgs
+      args: finalArgs
     };
+
+    log(`Executing step: ${substitutedStep.type} ${substitutedStep.args.join(' ')} `);
     
     switch (substitutedStep.type) {
       case 'ARG':
@@ -257,7 +340,9 @@ export class WorkflowManager {
     const parts = arg.split('=');
     if (parts.length === 2) {
       // ARG NAME=value format
-      context.args[parts[0]] = parts[1];
+      if(typeof context.args[parts[0]] === "undefined") {
+        context.args[parts[0]] = parts[1];
+      }
     } else {
       // ARG NAME format - value should come from context.args
       // If not present, leave it as is (will be substituted later)
@@ -326,7 +411,7 @@ export class WorkflowManager {
     const result = await context.docker.exec(context.containerName, command, {
       user: context.user,
       cwd: context.workdir,
-      env: context.env
+      env: { ...context.env, ...context.args }
     });
     
     if (result.exitCode !== 0) {

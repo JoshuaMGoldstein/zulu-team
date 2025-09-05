@@ -18,8 +18,8 @@ describe('WorkflowManager with WSDocker', () => {
     // Start a real container for tests
     await docker.run('test-container', 'gemini-docker');
     
-    // Clean the workspace directory inside the container
-    await docker.exec('test-container', 'rm -rf /workspace/*');
+    // Clean the workspace directory inside the container    
+    await docker.exec('test-container', 'rm -rf /workspace/test-project', {user:"root"});
   });
 
   afterEach(async () => {
@@ -52,7 +52,7 @@ describe('WorkflowManager with WSDocker', () => {
           [sshKey.id]: decodedPrivateKey
         },
         env: {},
-        user: 'exec',
+        user: 'git',
         workdir: '/workspace'
       };
       

@@ -218,12 +218,16 @@ export class WSDocker implements IDocker {
             throw new Error("No container named "+containerName+" found");
         }
 
-        connection.files[filePath] = content;
+        let finalOptions = JSON.parse(JSON.stringify(options));
+        if(!finalOptions.files) {
+            finalOptions.files = {};
+        }
+        finalOptions.files[filePath] = content;        
         
         if (mode !== undefined) {
-            await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`, options);
+            await this.exec(containerName, `chmod ${mode.toString(8)} "${filePath}"`, finalOptions);
         } else {
-            await this.exec(containerName, `:`, options);
+            await this.exec(containerName, `:`, finalOptions);
         }
     }
 
@@ -290,10 +294,10 @@ export class WSDocker implements IDocker {
     }
 
     private async loadVolumeFiles(containerName: string, sourcePath: string, destinationPath: string): Promise<void> {
-        if (sourcePath.startsWith('gs://')) {
+        /*if (sourcePath.startsWith('gs://')) {
             await this.mountGCSBucket(containerName, sourcePath, destinationPath);
             return;
-        }
+        }*/
 
         if (!fs.existsSync(sourcePath)) {
             console.log(`Source path ${sourcePath} does not exist`);
@@ -328,6 +332,7 @@ export class WSDocker implements IDocker {
         loadFilesRecursive('');
     }
 
+    /*
     private async mountGCSBucket(containerName: string, sourcePath: string, destinationPath: string): Promise<void> {
         const connection = this.connections.get(containerName);
         if (!connection) {
@@ -371,6 +376,7 @@ fi
             console.log(`Error mounting GCS bucket:`, error);
         }
     }
+    */
 
     async rm(containerName: string, force: boolean = true): Promise<void> {
         const connection = this.connections.get(containerName);

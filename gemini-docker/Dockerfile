@@ -108,12 +108,20 @@ RUN --mount=type=secret,id=exec_token \
     echo "EXEC_TOKEN=$(cat /run/secrets/exec_token)" > /home/node/app/.env && \
     chmod 600 /home/node/app/.env
 
+USER root
+
 #Install GCSFuse so we can use it to mount Google Cloud Buckets
-RUN  echo "deb http://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list && \
-    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add - && \
-    sudo apt-get update && \
-    && sudo apt-get install gcsfuse -y \
-    echo "gcsfuse installation script completed."
+RUN apt install lsb-release -y && \
+    export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && \
+    echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add - && \
+    apt-get update && \
+    apt-get install gcsfuse -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /proc/self/mounts /etc/mtab && \
+    echo "user_allow_other" >> /etc/fuse.conf && \
+    echo "gcsfuse installation script completed." 
 
 # Ensure node server runs as root for user switching capabilities
 USER root

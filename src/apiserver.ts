@@ -193,8 +193,8 @@ class ApiServer {
         return verbosity;
     }
 
-    private async handleDelegatedBotFlow(fromInstance:Bot, targetInstance: Bot, event:DelegationBotEvent) {
-        if(targetInstance.id == fromInstance.id) {
+    private async handleDelegatedBotFlow(fromInstance:Bot, targetInstance: Bot, event:DelegationBotEvent, forceAllowSameInstance:boolean=false) {
+        if(targetInstance.id == fromInstance.id && !forceAllowSameInstance) {
             console.error("tried to delegate event from and to same instance id: "+fromInstance.id, event);
             return;
         }
@@ -318,15 +318,27 @@ class ApiServer {
 
         //Check for whether the bot committed code on the correct branch.
         //if (project && originalEvent.branch) {
-        //    let pushSuccess:boolean = await dockerManager.runGitWorkflow('push-branch', fromInstance, project, originalEvent.branch);
+        //    let pushSuccess:boolean = await dockerManager.runGitWorkflow('push-branch', fromInstance, project, originalEvent.branch, responseJson.commit_hash);
         //}
+        
         //Check for committed code on the correct branch, and push it        
-
-        // 1. Handle problems
-        if (!project || responseJson.task_status === 'problem') {
+        if(responseJson.commit_hash && project) {
+            let pushSuccess:boolean = await dockerManager.runGitWorkflow('push-branch', fromInstance, project, originalEvent.branch, responseJson.commit_hash);
+            if(!pushSuccess) {
+                responseJson.task_status= 'problem';
+                responseJson.system_message=`Could not push commit_hash: ${responseJson.commit_hash} for branch ${originalEvent.branch} on project: ${originalEvent.project}`;
+                //What to do / who to provide this to?
+                //Should we provide the push failure to developer? Currently it goes back to delegator.
+            }
+        } 
+        
+        if(nextEvent.attempts > MAX_ATTEMPTS+1) {
+            console.error(`Error in processDelegationBotResponse, delegator=${delegator?delegator.id:'?'}, attempts=${nextEvent?nextEvent.attempts:'?'}`);
+        } else if (!project || responseJson.task_status === 'problem' || responseJson.task_status=='reply' ) {
+            // 1. Handle problems        
             if(!project) {
                 responseJson.task_status = 'problem';
-                responseJson.message = `Project ${originalEvent.project} not found`;
+                responseJson.system_message = `Project ${originalEvent.project} not found`;
             }
 
             if (delegator) {
@@ -336,12 +348,21 @@ class ApiServer {
             }
             return;
         } else if (fromInstance.role === 'developer' && (responseJson.task_status === 'complete' || responseJson.task_status === 'progress')) { 
-            // 2. Handle QA flow --FIXME: we shouldnt be hardcoding roles at all.
+            // Handle case if developer didnt provide a commit hash
             const qaBot = (await configManager.getInstances(originalEvent.account_id)).find(i => i.role == 'qa' && i.managedProjects.indexOf(project.name)>=0);
-            if (qaBot) {
+            if(!responseJson.commit_hash) {
+                log(`Developer failed to provide commit_hash for ${project.name}. Delegating back to developer ${fromInstance.id}.`)
+                nextEvent.system_message = 'You didnt provide a commit_hash with your response on the root object. Please check to make sure you committed the code using: git status, and: git log -n 1. Review the code to ensure your changes are intact, commit uncommitted files if needed, then provide a full json response again, including commit_hash.'
+                this.handleDelegatedBotFlow(fromInstance, fromInstance, nextEvent, true);
+            } else if (qaBot) {
+                // 2. Handle QA flow --FIXME: we shouldnt be hardcoding roles at all.                
                 log(`Developer task complete for ${project.name}. Delegating to QA bot ${qaBot.id}.`);                                
-                this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);
-                return;
+                this.handleDelegatedBotFlow(fromInstance, qaBot, nextEvent);                
+            } else if(delegator) {
+                nextEvent.final=true;
+                nextEvent.system_message = `No QA Bot Assigned for project: ${project.name}. Delegating back to delegator: ${delegator.id}`;
+                log(nextEvent.system_message);
+                this.handleDelegatedBotFlow(fromInstance, delegator, nextEvent);
             }
         } else if (fromInstance.role === 'qa' && responseJson.task_status === 'failed') { 
             // 3. Handle QA failure (and max attempts)

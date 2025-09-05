@@ -2,7 +2,7 @@ import { envsubParser, SYNTAX } from './utils/envsub';
 import * as fs from 'fs';
 import * as path from 'path';
 import { log } from './utils/log';
-import { IDocker, ExecOptions } from './utils/idocker';
+import { IDocker, ExecOptions, ExecResult } from './utils/idocker';
 import { publicdb } from './supabase';
 import {Bot} from './bots/types'
 import configManager from './configmanager'
@@ -11,6 +11,12 @@ import { config } from 'dotenv';
 export interface WorkflowStep {
   type: 'ARG' | 'USER' | 'ENV' | 'COPY' | 'WORKDIR' | 'RUN';
   args: string[];
+}
+
+export interface WorkflowResult {
+  exitCode: number,
+  stdout: string[] //the final stdout may be useful as a result if a return value is needed, such as a commit-hash  
+  stderr: string[]
 }
 
 export interface WorkflowContext {
@@ -113,7 +119,7 @@ export class WorkflowManager {
   /**
    * Build a context for Git-based workflows with all necessary arguments and files
    */
-  public async buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string): Promise<WorkflowContext> {
+  public async buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string, commit_hash?:string): Promise<WorkflowContext> {
     // Fetch git key data from database using project.account_id
     const { data: gitKeys, error: gitKeysError } = await publicdb
       .from('git_keys')
@@ -143,6 +149,9 @@ export class WorkflowManager {
     
     if (branch) {
       args.BRANCH_NAME = branch;
+    }
+    if(commit_hash) {
+      args.COMMIT_HASH = commit_hash;
     }
     
     return {
@@ -245,8 +254,8 @@ export class WorkflowManager {
   public async executeWorkflow(
     workflowName: string,
     context: WorkflowContext,
-    executeFromSteps: boolean = true
-  ): Promise<void> {
+    includeFromSteps: boolean = true
+  ): Promise<WorkflowResult> {
     const workflowPath = path.join(this.workflowsPath, `${workflowName}.workflow`);
     
     if (!fs.existsSync(workflowPath)) {
@@ -258,7 +267,7 @@ export class WorkflowManager {
     
     // Check for FROM directive (should be first line if present)
     let stepsStartIndex = 0;
-    if (executeFromSteps && lines[0] && lines[0].trim().toUpperCase().startsWith('FROM ')) {
+    if (includeFromSteps && lines[0] && lines[0].trim().toUpperCase().startsWith('FROM ')) {
       const baseWorkflow = lines[0].trim().substring(5).trim(); // Extract workflow name after FROM
       stepsStartIndex = 1; // Skip the FROM line when parsing steps
       
@@ -275,15 +284,30 @@ export class WorkflowManager {
     
     log(`Executing workflow: ${workflowName} with ${steps.length} steps`);
     
-    for (const step of steps) {
-      await this.executeStep(step, context);
+
+    let workflowResult:WorkflowResult = {
+      exitCode:0,
+      stdout: [],
+      stderr: []
     }
+
+    for (const step of steps) {
+      let result = await this.executeStep(step, context);
+      if(result) {
+        workflowResult.exitCode = result.exitCode;
+        if(result.stdout) workflowResult.stdout.push(result.stdout);
+        if(result.stderr) workflowResult.stderr.push(result.stderr);
+      }
+
+    }
+
+    return workflowResult;
   }
 
   /**
    * Execute a single workflow step
    */
-  private async executeStep(step: WorkflowStep, context: WorkflowContext): Promise<void> {
+  private async executeStep(step: WorkflowStep, context: WorkflowContext): Promise<ExecResult|undefined> {
     
     
     const rawArgs = step.args[0] || ''; // Get the single raw argument string
@@ -302,11 +326,15 @@ export class WorkflowManager {
       args: finalArgs
     };
 
-    log(`Executing step: ${substitutedStep.type} ${substitutedStep.args.join(' ')} `);
+
+
+    let value = substitutedStep.type== 'ARG'? context.args[substitutedStep.args.join(' ')] : '';
+    log(`Executing step: ${substitutedStep.type} ${substitutedStep.args.join(' ')} ${value?'('+value+')':''}`);
     
     switch (substitutedStep.type) {
       case 'ARG':
         this.handleArg(substitutedStep, context);
+        
         break;
       case 'USER':
         this.handleUser(substitutedStep, context);
@@ -321,11 +349,13 @@ export class WorkflowManager {
         this.handleWorkdir(substitutedStep, context);
         break;
       case 'RUN':
-        await this.handleRun(substitutedStep, context);
+        let result = await this.handleRun(substitutedStep, context);
+        return result;
         break;
       default:
         throw new Error(`Unknown workflow step type: ${substitutedStep.type}`);
     }
+    return undefined;
   }
 
   /**
@@ -405,7 +435,7 @@ export class WorkflowManager {
   /**
    * Handle RUN step - execute command in container
    */
-  private async handleRun(step: WorkflowStep, context: WorkflowContext): Promise<void> {
+  private async handleRun(step: WorkflowStep, context: WorkflowContext): Promise<ExecResult> {
     const command = step.args.join(' ');
     // For RUN commands, we don't pass files since they should already be written to the container
     const result = await context.docker.exec(context.containerName, command, {
@@ -417,6 +447,8 @@ export class WorkflowManager {
     if (result.exitCode !== 0) {
       throw new Error(`Command failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
     }
+
+    return result;
   }
 }
 

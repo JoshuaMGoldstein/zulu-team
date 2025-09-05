@@ -1,25 +1,32 @@
 FROM scratch
 
+
 # Mount GCS Bucket Workflow
 # This workflow mounts a GCS bucket or subpath to a specified mount point
 
 ARG BUCKET_NAME
 ARG MOUNT_POINT
 ARG SUB_PATH
-ARG READ_ONLY=true
+ARG READ_ONLY
 
 # Run as user git, the service-account-key should not be accesisble to the main bot under exec
-USER git
+USER root
 
 # Ensure mount point exists
-RUN mkdir -p ${MOUNT_POINT}
-chown "${NON_ROOT_UID}:${NON_ROOT_GID}" "${MOUNT_POINT}"
+RUN mkdir -p ${MOUNT_POINT} 
+
+#RUN chown "${NON_ROOT_UID}:${NON_ROOT_GID}" "${MOUNT_POINT}"
 
 # Copy service account key if provided
-COPY service-account-key.json /home/git/service-account-key.json
+COPY service-account-key.json ~/service-account-key.json
 
 # Set environment variable for GCS authentication
-ENV GOOGLE_APPLICATION_CREDENTIALS=/home/git/service-account-key.json
+ENV GOOGLE_APPLICATION_CREDENTIALS /root/service-account-key.json
+ARG NON_ROOT_UID=1001
+ARG NON_ROOT_GID=2000
+ENV NON_ROOT_UID ${NON_ROOT_UID}
+ENV NON_ROOT_GID ${NON_ROOT_GID}
+
 
 # Mount the specific GCS subdirectory using gcsfuse
 # --only-dir: Restricts the mount to only this subdirectory
@@ -29,19 +36,8 @@ ENV GOOGLE_APPLICATION_CREDENTIALS=/home/git/service-account-key.json
 #                 necessary when uid/gid are set to a specific user.
 # -o foreground: Crucial for Cloud Run, keeps gcsfuse running as the main process.
 
-NON_ROOT_UID="1000"
-NON_ROOT_GID="1000"
 
-RUN gcsfuse \
-    ${READ_ONLY:+-o ro} \
-    -o uid=1001 \
-    -o gid=1001 \
-    -o allow_other
-    ${SUB_PATH:+--only-dir ${SUB_PATH}} \
-    ${BUCKET_NAME} ${MOUNT_POINT}
-
-# Wait a moment for gcsfuse to establish the mount
-sleep 5
+RUN gcsfuse --implicit-dirs -o allow_other${READ_ONLY:+,ro} --uid=${NON_ROOT_UID} --gid=${NON_ROOT_GID} ${SUB_PATH:+--only-dir ${SUB_PATH}} ${BUCKET_NAME} ${MOUNT_POINT}
 
 # Verify mount
 RUN ls -la ${MOUNT_POINT}

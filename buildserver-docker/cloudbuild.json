@@ -2,7 +2,7 @@
   "steps": [
     {
         "name": "gcr.io/cloud-builders/docker",
-        "script": "docker build --secret id=github_token,env=EXEC_API_KEY -t us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest .",        
+        "script": "docker build --secret id=github_token,env=EXEC_API_KEY -t us-east4-docker.pkg.dev/zulu-team/zulu-team/buildserver-docker:latest .",        
         "env": ["DOCKER_BUILDKIT=1"],
         "secretEnv": ["EXEC_API_KEY"]
     }

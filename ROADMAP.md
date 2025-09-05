@@ -1,3 +1,11 @@
++ Commits / Branching / Messages
+- Cloud Deployment
+- Secrets Management
+- QA / Testing Process w/ integrated deploy
+- Staging/Prod deploys
+
+
+
 a.	PROJECT MOUNTING SYSTEM
  -  We need to support having SSH keys and mounting the GIT Repos for the bots.
  

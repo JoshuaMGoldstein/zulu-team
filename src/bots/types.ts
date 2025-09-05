@@ -198,6 +198,8 @@ export class DelegationBotEvent extends BotEvent {
     public branch?: string;
     public changedFiles?: string[];
     //The original comms Event which caused the delegation chain
+    
+    public system_message?: string;
     public commsEvent:BotEvent;
 }
 

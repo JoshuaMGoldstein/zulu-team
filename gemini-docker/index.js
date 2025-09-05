@@ -78,12 +78,10 @@ function resetIdleTimeout() {
             activeWebSocket.close(1001, 'Idle timeout');
         }
         // Kill the container
+        exec ('umount -a');
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
         exec('rm -rf /var/tmp/*');
-        exec('rm -rf /workspace/*');
-        exec('rm -rf /tmp/*');
-        exec('rm -rf /var/tmp/*');    
         exec('rm -rf /home/git/*');
         exec('rm -rf /home/git/.ssh/*');
 
@@ -207,7 +205,7 @@ function setupWorkspace(files, username = 'exec') {
 }
 
 // Function to spawn a command as specific user
-function spawnCommand(command, args, env, clientId, ws = null, username = 'exec', clientPid = null, stdinContent = null) {
+function spawnCommand(command, args, cwd, env, clientId, ws = null, username = 'exec', clientPid = null, stdinContent = null) {
     console.log(`Spawning command: ${command} ${args.join(' ')} for client: ${clientId} as user: ${username}`);
     
     
@@ -229,9 +227,9 @@ function spawnCommand(command, args, env, clientId, ws = null, username = 'exec'
         delete processEnv.EXEC_TOKEN;
     //}
     const childProcess = spawn(command, args, {
-        cwd: WORKSPACE_DIR,
+        cwd: cwd || WORKSPACE_DIR,
         env: processEnv,
-        shell: true,
+        shell: '/bin/bash', //true,
         uid: userInfo.uid>0?userInfo.uid:undefined,
         gid: userInfo.gid>0?userInfo.gid:undefined,
         stdio: ['pipe', 'pipe', 'pipe']
@@ -305,7 +303,7 @@ function broadcastToClient(clientId, message) {
 
 // POST endpoint for executing commands (requires authorization)
 app.post('/exec', requireAuth, (req, res) => {
-    const { clientid, command, env = {}, files, user = 'exec' } = req.body;
+    const { clientid, command, cwd, env = {}, files, user = 'exec' } = req.body;
     
     if (!clientid || !command) {
         return res.status(400).json({ error: 'clientid and command are required' });
@@ -323,7 +321,7 @@ app.post('/exec', requireAuth, (req, res) => {
 
         // Parse command and arguments
         const [cmd, ...args] = command.split(' ');
-        const pid = spawnCommand(cmd, args, env, clientid, null, user);
+        const pid = spawnCommand(cmd, args, cwd, env, clientid, null, user);
         
         res.json({ type: 'open', pid: pid });
     } catch (error) {
@@ -380,7 +378,7 @@ wss.on('connection', (ws, req) => {
             
             if (data.type === 'exec') {
                 // Execute command via WebSocket
-                const { command, env = {}, files, user = 'exec', pid: clientProvidedPid, stdin: stdinContent } = data;
+                const { command, cwd, env = {}, files, user = 'exec', pid: clientProvidedPid, stdin: stdinContent } = data;
                 if (!command) {
                     ws.send(JSON.stringify({ error: 'command is required' }));
                     return;
@@ -398,7 +396,7 @@ wss.on('connection', (ws, req) => {
                     }
 
                     const [cmd, ...args] = command.split(' ');
-                    const pid = spawnCommand(cmd, args, env, clientId, ws, user, clientProvidedPid, stdinContent);
+                    const pid = spawnCommand(cmd, args, cwd, env, clientId, ws, user, clientProvidedPid, stdinContent);
                     ws.send(JSON.stringify({ type: 'open', pid: pid }));
                 } catch (error) {
                     ws.send(JSON.stringify({ error: error.message }));
@@ -446,11 +444,13 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container
         console.log('WebSocket closed, rebooting container');
+        exec ('umount -a');
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
-        exec('rm -rf /var/tmp/*');    
+        exec('rm -rf /var/tmp/*');
         exec('rm -rf /home/git/*');
         exec('rm -rf /home/git/.ssh/*');
+
 
         /*exec('kill 1', (error) => {
             if (error) {
@@ -474,6 +474,7 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container on error
         console.log('WebSocket error, rebooting container');
+        exec ('umount -a');
         exec('rm -rf /workspace/*');
         exec('rm -rf /tmp/*');
         exec('rm -rf /var/tmp/*');    

@@ -1,6 +1,6 @@
 ## Your Responsibilities
 
-1. Review the project list and bot instance list in /bot-instances/projects.json and /bot-instances/instances.json but do not modify them. Only the user may modify these files via a web UI.
+1. Review the project list and bot instance list in /workspace/bot-instances/projects.json and /workspace/bot-instances/instances.json but do not modify them. Only the user may modify these files via a web UI.
 
 2. You do not develop the projects yourself, but you are only responsible for managing project information such as TODO lists and other project status information.
 
@@ -16,10 +16,10 @@
 - Delegate a task (including required branch):
 ```bash
 curl -X POST ${API_URL}/instance/developer-id/delegated-task \
-  -H 'X-Instance-Id: ${INSTANCE_ID}' \
-  -H 'X-Event-Id: ${EVENT_ID}' \
-  -H 'Authorization: Bearer ${API_KEY}' \
-  -H 'Content-Type: application/json' \
+  -H "X-Instance-Id: ${INSTANCE_ID}" \
+  -H "X-Event-Id: ${EVENT_ID}" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
   -d '{
     "project": "",
     "task_description": "",
@@ -27,8 +27,8 @@ curl -X POST ${API_URL}/instance/developer-id/delegated-task \
     "notes": "",
     "data": {},
     "priority": "high",
-    "discordChannelId": "${DISCORD_CHANNEL_ID}",
-    "statusMessageId": "${STATUS_MESSAGE_ID}"
+    "discordChannelId": "'"${DISCORD_CHANNEL_ID}"'",
+    "statusMessageId": "'"${STATUS_MESSAGE_ID}"'"
 }'
 ```
 

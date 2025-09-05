@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -8,16 +9,56 @@ const os = require('os');
 
 const app = express();
 const server = http.createServer(app);
+
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
 app.use(express.static('public'));
 
+// Authorization middleware
+const AUTH_HEADER = 'Authorization';
+const BEARER_PREFIX = 'Bearer ';
+
+// Map usernames to UIDs and GIDs
+const userMap = {
+    'exec': { uid: 1001, gid: 2000, path: '/home/exec/.npm-global/bin', home: '/home/exec' },
+    'git': { uid: 1002, gid: 2000, home: '/home/git' },        
+    'root': {uid: 0, gid: 0, home: '/root'}
+};
+
+
+function requireAuth(req, res, next) {
+    // Check Authorization header first
+    const authHeader = req.headers[AUTH_HEADER.toLowerCase()];
+    if (authHeader && authHeader.startsWith(BEARER_PREFIX)) {
+        const token = authHeader.substring(BEARER_PREFIX.length);
+        const expectedToken = process.env.EXEC_TOKEN;
+        
+        if (expectedToken && token === expectedToken) {
+            return next();
+        }
+    }
+    
+    // Check query parameter as fallback
+    const token = req.query.token;
+    const expectedToken = process.env.EXEC_TOKEN;
+    
+    if (token && expectedToken && token === expectedToken) {
+        return next();
+    }
+    
+    return res.status(401).json({ error: 'Missing or invalid authorization' });
+}
+
+
+
 // Ensure workspace directory exists
 const WORKSPACE_DIR = '/workspace';
 if (!fs.existsSync(WORKSPACE_DIR)) {
-    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR);
+    fs.chmodSync(WORKSPACE_DIR, 0o2777); //adds setgid bit
 }
+
 
 // Store active processes and their client mappings
 const activeProcesses = new Map(); // pid -> { process, clientId, ws }
@@ -37,38 +78,64 @@ function resetIdleTimeout() {
             activeWebSocket.close(1001, 'Idle timeout');
         }
         // Kill the container
-        exec('kill 1', (error) => {
+        exec ('umount -a');
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
+        //FIXME: GET MORE ANGRY ABOUT SECURITY AND ROTATE USERIDS
+
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     }, timeoutSeconds * 1000);
 }
 
-// Function to setup workspace with files
-function setupWorkspace(files) {
+// Function to setup workspace with files for specific user
+function setupWorkspace(files, username = 'exec') {
     if (!files || typeof files !== 'object') {
         return;
     }
 
     try {
-        // Clear existing workspace contents
-        if (fs.existsSync(WORKSPACE_DIR)) {
-            fs.rmSync(WORKSPACE_DIR, { recursive: true, force: true });
+        // Map usernames to UIDs and GIDs
+        
+        const userInfo = userMap[username]; // || { uid: 1001, gid: 1001 };
+        if(!userInfo) {
+            console.log("user not found: "+username);
+            return;
         }
-        fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+        const homeDir = userInfo.home;
+
+        // Ensure workspace directory exists
+        if (!fs.existsSync(WORKSPACE_DIR)) {
+            fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+            fs.chmodSync(WORKSPACE_DIR, 0o777);
+        }
 
         // Write new files
         for (const [filePath, base64Content] of Object.entries(files)) {
             let fullPath;
             let targetDir;
             
+            
+
             // Handle home directory files
-            if (filePath.startsWith('~/')) {
-                const homeDir = os.homedir();
-                const relativePath = filePath.substring(2); // Remove '~/'
+            if (filePath.startsWith('~/') || filePath.startsWith(homeDir)) {
+                
+                const relativePath = filePath.startsWith('~/') ? filePath.substring(2) : filePath.substring(homeDir.length); // Remove '~/' or 'homedir'
+                const normalizedPath = path.normalize(relativePath);
+                if(normalizedPath.indexOf('..')>=0) {
+                    console.log(" path contained bad characters", relativePath);
+                    return;
+                }
                 fullPath = path.join(homeDir, relativePath);
                 targetDir = path.dirname(fullPath);
                 
@@ -77,38 +144,56 @@ function setupWorkspace(files) {
                     fs.mkdirSync(targetDir, { recursive: true });
                 }
                 
-                // Handle .ssh directory with special permissions
+                // Handle .ssh directory with special permissions for any user
                 if (filePath.startsWith('~/.ssh')) {
                     const sshDir = path.join(homeDir, '.ssh');
                     
                     // Ensure .ssh directory exists with 700 permissions
                     if (!fs.existsSync(sshDir)) {
                         fs.mkdirSync(sshDir, { recursive: true });
+                        fs.chownSync(sshDir, userInfo.uid, userInfo.gid);
+                        fs.chmodSync(sshDir, 0o700);
                     }
-                    fs.chmodSync(sshDir, 0o700);
                     
                     // Write file and set 600 permissions for private keys
                     const fileContent = Buffer.from(base64Content, 'base64');
                     fs.writeFileSync(fullPath, fileContent);
+                    fs.chownSync(fullPath, userInfo.uid, userInfo.gid);
                     fs.chmodSync(fullPath, 0o600);
                 } else {
                     // Regular home directory file
                     const fileContent = Buffer.from(base64Content, 'base64');
                     fs.writeFileSync(fullPath, fileContent);
+                    fs.chownSync(fullPath, userInfo.uid, userInfo.gid);
                 }
             } else {
+                const normalizedPath = path.normalize(filePath);
+                if(normalizedPath.indexOf('..')>=0) {
+                    console.log("path contained bad characters: ", filePath);
+                    return;
+                }
+
                 // Regular workspace file
-                fullPath = path.join(WORKSPACE_DIR, filePath);
+                if (normalizedPath.startsWith(WORKSPACE_DIR+'/')) {
+                    fullPath = normalizedPath;
+                } else if (normalizedPath.startsWith('/')) {
+                    // Other absolute paths - prepend workspace
+                    fullPath = path.join(WORKSPACE_DIR, normalizedPath.substring(1));
+                } else {
+                    fullPath = path.join(WORKSPACE_DIR, normalizedPath);
+                }
                 targetDir = path.dirname(fullPath);
                 
                 // Create directories if they don't exist
                 if (!fs.existsSync(targetDir)) {
                     fs.mkdirSync(targetDir, { recursive: true });
+                    fs.chownSync(targetDir, userInfo.uid, userInfo.gid);
                 }
                 
                 // Write file from base64
                 const fileContent = Buffer.from(base64Content, 'base64');
                 fs.writeFileSync(fullPath, fileContent);
+                fs.chownSync(fullPath, userInfo.uid, userInfo.gid);
             }
         }
         
@@ -119,25 +204,50 @@ function setupWorkspace(files) {
     }
 }
 
-// Function to spawn a command
-function spawnCommand(command, args, env, clientId, ws = null) {
-    console.log(`Spawning command: ${command} ${args.join(' ')} for client: ${clientId}`);
+// Function to spawn a command as specific user
+function spawnCommand(command, args, cwd, env, clientId, ws = null, username = 'exec', clientPid = null, stdinContent = null) {
+    console.log(`Spawning command: ${command} ${args.join(' ')} for client: ${clientId} as user: ${username}`);
     
-    const processEnv = { ...process.env, ...env };
+    
+    const userInfo = userMap[username];
+    if(!userInfo) {
+        console.log("user not found: "+username);
+        return;
+    }
+    
+    // Filter out sensitive environment variables for non-root users
+    const processEnv = { 
+        ...process.env, 
+        ...env,
+        PATH: (userInfo.path ? userInfo.path + ':' : '') + process.env.PATH,
+        HOME: userInfo.home,
+        XDG_CONFIG_HOME: userInfo.home + '/.config'
+    };
+    //if (username !== 'root') {
+        delete processEnv.EXEC_TOKEN;
+    //}
     const childProcess = spawn(command, args, {
-        cwd: WORKSPACE_DIR,
+        cwd: cwd || WORKSPACE_DIR,
         env: processEnv,
-        shell: true,
+        shell: '/bin/bash', //true,
+        uid: userInfo.uid>0?userInfo.uid:undefined,
+        gid: userInfo.gid>0?userInfo.gid:undefined,
         stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    const pid = childProcess.pid;
+    if (stdinContent) {
+        childProcess.stdin.write(stdinContent);
+        childProcess.stdin.end();
+    }
+
+    const pidToUse = clientPid || childProcess.pid;
     
     // Store process info
-    activeProcesses.set(pid, {
+    activeProcesses.set(pidToUse, {
         process: childProcess,
         clientId: clientId,
-        ws: ws
+        ws: ws,
+        clientPid: clientPid // Store the client-provided PID as well
     });
 
     // Handle stdout
@@ -145,7 +255,7 @@ function spawnCommand(command, args, env, clientId, ws = null) {
         const message = {
             type: 'stdout',
             data: data.toString(),
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
     });
@@ -155,7 +265,7 @@ function spawnCommand(command, args, env, clientId, ws = null) {
         const message = {
             type: 'stderr',
             data: data.toString(),
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
     });
@@ -165,23 +275,23 @@ function spawnCommand(command, args, env, clientId, ws = null) {
         const message = {
             type: 'stdclose',
             data: `${code}`,
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
-        activeProcesses.delete(pid);
+        activeProcesses.delete(pidToUse);
     });
 
     childProcess.on('error', (error) => {
         const message = {
             type: 'stderr',
             data: `Error: ${error.message}`,
-            pid: pid
+            pid: pidToUse
         };
         broadcastToClient(clientId, message);
-        activeProcesses.delete(pid);
+        activeProcesses.delete(pidToUse);
     });
 
-    return pid;
+    return pidToUse;
 }
 
 // Broadcast message to the active WebSocket connection
@@ -191,23 +301,27 @@ function broadcastToClient(clientId, message) {
     }
 }
 
-// POST endpoint for executing commands
-app.post('/exec', (req, res) => {
-    const { clientid, command, env = {}, files } = req.body;
+// POST endpoint for executing commands (requires authorization)
+app.post('/exec', requireAuth, (req, res) => {
+    const { clientid, command, cwd, env = {}, files, user = 'exec' } = req.body;
     
     if (!clientid || !command) {
         return res.status(400).json({ error: 'clientid and command are required' });
     }
 
+    if (!['exec', 'git', 'root'].includes(user)) {
+        return res.status(400).json({ error: 'user must be either "exec" or "git" or "root"' });
+    }
+
     try {
         // Setup workspace if files provided
         if (files) {
-            setupWorkspace(files);
+            setupWorkspace(files, user);
         }
 
         // Parse command and arguments
         const [cmd, ...args] = command.split(' ');
-        const pid = spawnCommand(cmd, args, env, clientid);
+        const pid = spawnCommand(cmd, args, cwd, env, clientid, null, user);
         
         res.json({ type: 'open', pid: pid });
     } catch (error) {
@@ -219,6 +333,22 @@ app.post('/exec', (req, res) => {
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const clientId = url.searchParams.get('clientid');
+    
+    // Check authorization - first from query parameter, then from header
+    let token = url.searchParams.get('token');
+    if (!token) {
+        const authHeader = req.headers['authorization'];
+        if (authHeader && authHeader.startsWith(BEARER_PREFIX)) {
+            token = authHeader.substring(BEARER_PREFIX.length);
+        }
+    }
+    
+    const expectedToken = process.env.EXEC_TOKEN;
+    
+    if (!token || !expectedToken || token !== expectedToken) {
+        ws.close(1008, 'Missing or invalid authorization');
+        return;
+    }
     
     if (!clientId) {
         ws.close(1008, 'clientid query parameter is required');
@@ -248,20 +378,25 @@ wss.on('connection', (ws, req) => {
             
             if (data.type === 'exec') {
                 // Execute command via WebSocket
-                const { command, env = {}, files } = data;
+                const { command, cwd, env = {}, files, user = 'exec', pid: clientProvidedPid, stdin: stdinContent } = data;
                 if (!command) {
                     ws.send(JSON.stringify({ error: 'command is required' }));
+                    return;
+                }
+
+                if (!['exec', 'git', 'root'].includes(user)) {
+                    ws.send(JSON.stringify({ error: 'user must be either "exec" or "git" or "root"' }));
                     return;
                 }
 
                 try {
                     // Setup workspace if files provided
                     if (files) {
-                        setupWorkspace(files);
+                        setupWorkspace(files, user);
                     }
 
                     const [cmd, ...args] = command.split(' ');
-                    const pid = spawnCommand(cmd, args, env, clientId, ws);
+                    const pid = spawnCommand(cmd, args, cwd, env, clientId, ws, user, clientProvidedPid, stdinContent);
                     ws.send(JSON.stringify({ type: 'open', pid: pid }));
                 } catch (error) {
                     ws.send(JSON.stringify({ error: error.message }));
@@ -309,13 +444,21 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container
         console.log('WebSocket closed, rebooting container');
-        exec('kill 1', (error) => {
+        exec ('umount -a');
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
+
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     });
 
     // Handle errors
@@ -331,13 +474,20 @@ wss.on('connection', (ws, req) => {
         
         // Reboot the container on error
         console.log('WebSocket error, rebooting container');
-        exec('kill 1', (error) => {
+        exec ('umount -a');
+        exec('rm -rf /workspace/*');
+        exec('rm -rf /tmp/*');
+        exec('rm -rf /var/tmp/*');    
+        exec('rm -rf /home/git/*');
+        exec('rm -rf /home/git/.ssh/*');
+
+        /*exec('kill 1', (error) => {
             if (error) {
                 console.error('Error executing kill 1:', error);
             } else {
                 console.log('Container reboot initiated');
             }
-        });
+        });*/
     });
 });
 

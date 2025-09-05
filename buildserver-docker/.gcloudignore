@@ -6,6 +6,6 @@ gcloudrun
 .env
 .dev.vars
 build.sh
-Dockerfile copy
+Dockerfile-*
 entrypoint.sh
 gcloud-key.json

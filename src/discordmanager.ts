@@ -14,7 +14,7 @@ import { assert, logAssert } from './utils/assert'
 
 class DiscordManager {
     private channelAccounts: Map<string,string> = new Map(); //map from discord channelid to accountid
-    private discordClients: Map<string, Client> = new Map();        
+    private discordClients: Map<string, Client> = new Map(); //map from BOT ID (not Instance ID) to DiscordClient
 
     constructor() {
         this.fetchAllChannelInfos();
@@ -135,8 +135,8 @@ class DiscordManager {
         this.discordClients.set(bot.id, newClient);
     }
 
-    public getDiscordClient(instanceId: string): Client | undefined {
-        return this.discordClients.get(instanceId);
+    public getDiscordClient(instance: Bot): Client | undefined {
+        return this.discordClients.get(instance.bot_id);
     }
 
     public async createStatusMessageIfApplicable(targetInstance:Bot, event:BotEvent):Promise<Message|undefined> {
@@ -150,7 +150,7 @@ class DiscordManager {
             let commsEvent = event.commsEvent;
             if(commsEvent instanceof DiscordBotEvent) {
                 let discordCommsEvent = commsEvent as DiscordBotEvent;
-                let discordClient = this.discordClients.get(targetInstance.id);
+                let discordClient = this.discordClients.get(targetInstance.bot_id);
                 if(discordClient) {
                     try {
                         const channel = await discordClient.channels.fetch(commsEvent.message.channelId);

@@ -8,14 +8,14 @@
     },
     {
         "name": "gcr.io/cloud-builders/docker",
-        "script": "docker build -t us-east4-docker.pkg.dev/zulu-team/account${ACCOUNT_ID}/{$PROJECT_ID}:${BRANCH_NAME} .",        
+        "script": "docker build -t us-east4-docker.pkg.dev/zulu-team/account${ACCOUNT_ID}/{$PROJECT_NAME}:${BRANCH_NAME}-latest .",        
         "env": ["DOCKER_BUILDKIT=1"]        
     }
   ],
   "availableSecrets": {
       "secretManager": [
         {
-          "versionName": "projects/$PROJECT_NUMBER/secrets/account${ACCOUNT_ID}-${PROJECT_ID}-ENVFILE/versions/latest",
+          "versionName": "projects/$PROJECT_NUMBER/secrets/account${ACCOUNT_ID}-${PROJECT_NAME}-ENVFILE/versions/latest",
           "env": "ENVFILE"
         }                   
       ]
@@ -24,5 +24,5 @@
   "options": {
     "defaultLogsBucketBehavior": "REGIONAL_USER_OWNED_BUCKET"
   },
-  "images": "us-east4-docker.pkg.dev/zulu-team/account${ACCOUNT_ID}/${PROJECT_ID}:${BRANCH_NAME}"
+  "images": "us-east4-docker.pkg.dev/zulu-team/account${ACCOUNT_ID}/${PROJECT_NAME}:${BRANCH_NAME}-latest"
 }

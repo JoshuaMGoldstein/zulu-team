@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WSDocker } from '../utils/wsdocker';
-import { WorkflowManager } from '../workflowmanager';
+import { WorkflowContext, WorkflowManager } from '../workflowmanager';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -147,6 +147,7 @@ describe('WorkflowManager with WSDocker', () => {
       };
       
       // Execute the workflow with correct working directory
+      await workflowManager.executeWorkflow('clone-project', context, true);
       await workflowManager.executeWorkflow('set-branch', context);
       
       // Check current branch - the workflow should have created a new local branch tracking the remote
@@ -172,7 +173,7 @@ describe('WorkflowManager with WSDocker', () => {
       const sshRepoUrl = testProject.repositoryUrl.replace('https://github.com/', 'git@github.com:');
       
       // Context with all necessary arguments
-      const context = {
+      const context:WorkflowContext = {
         containerName: 'test-container',
         docker: docker,
         args: {
@@ -186,19 +187,34 @@ describe('WorkflowManager with WSDocker', () => {
           [sshKey.id]: decodedPrivateKey
         },
         env: {},
-        user: 'exec',
+        user: 'git',
         workdir: '/workspace/test-project'
       };
       
       // First, set up the environment by running the set-branch workflow
+      await workflowManager.executeWorkflow('clone-project', context);
       await workflowManager.executeWorkflow('set-branch', context);
       
+      context.user = 'exec'; 
+      context.args['FILENAME'] = 'count.txt';
+      await workflowManager.executeWorkflow('touch-increment-file', context);
+
+      context.args['COMMIT_MESSAGE'] = 'Test commit';
+
+      let workflowResult = await workflowManager.executeWorkflow('commit-all', context);      
+      let commit_hash = workflowResult.stdout[workflowResult.stdout.length-1];
+      expect(commit_hash).toBeDefined();
+      expect(commit_hash).toBeTypeOf("string");
+      //get output.messages[output.messages.length-1] which contains the commit hash
+
       // Update context for push-branch (remove unnecessary args)
       const pushContext = {
         ...context,
+        user: 'git',
         args: {
           BRANCH_NAME: 'test-branch',
-          PROJECT_NAME: 'test-project'
+          PROJECT_NAME: 'test-project',
+          COMMIT_HASH: commit_hash          
         },
         files: {}
       };

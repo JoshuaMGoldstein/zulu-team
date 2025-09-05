@@ -19,7 +19,7 @@ gcloud artifacts repositories create zulu-team --repository-format=docker --desc
 docker push us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest
 gcloud run deploy zulu-gemini-docker --image us-east4-docker.pkg.dev/zulu-team/zulu-team/gemini-docker:latest \
   --region us-east4 --allow-unauthenticated --min-instances=0 --max-instances=8 --concurrency=1 \
-  --platform managed \ 
+  --platform managed \
   --execution-environment=gen2
 
 # Note that anthos supports on-preomise cloud which sounds way fucking cool to use cloud run on your own dedicated hardware.

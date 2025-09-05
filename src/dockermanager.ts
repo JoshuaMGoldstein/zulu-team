@@ -269,10 +269,10 @@ class DockerManager {
         return queued;
     }
 
-    public async runGitWorkflow(workflowName:string, fromInstance:Bot, project:Project, branch?:string):Promise<boolean> {
+    public async runGitWorkflow(workflowName:string, fromInstance:Bot, project:Project, branch?:string, commit_hash?:string):Promise<boolean> {
         let containerName = this.getContainerName(fromInstance);
         try {
-            let context = await workflowManager.buildGitContext(this.docker,containerName, project, branch);
+            let context = await workflowManager.buildGitContext(this.docker,containerName, project, branch, commit_hash);
             await workflowManager.executeWorkflow(workflowName, context);
             return true;
         } catch(e) {

@@ -18,6 +18,8 @@ import gcsUtil from './utils/gs';
 
 dotenv.config();
 
+const DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';
+
 
 type Bot_Instance = Database['public']['Tables']['bot_instances']['Row'];
 
@@ -142,6 +144,11 @@ class ConfigManager {
     }
 
     private async initializeGCSResources(accountId: string) {
+        // Skip GCS resource initialization for the default account
+        if (accountId === DEFAULT_ACCOUNT_ID) {
+            return;
+        }
+
         // Check for existing service account
         const { data: existingServiceAccount } = await publicdb
             .from('service_accounts')
@@ -158,7 +165,7 @@ class ConfigManager {
                 throw new Error("GCP_PROJECT_ID not set in environment variables.");
             }
 
-            const serviceAccountName = 'acct'+this.uuidToBase36(`${accountId}`);
+            const serviceAccountName = 'acct-'+this.uuidToBase36(`${accountId}`);
             const serviceAcctEmail = `${serviceAccountName}@${projectId}.iam.gserviceaccount.com`;
 
             try { 
@@ -256,6 +263,11 @@ class ConfigManager {
     }
 
     private async loadAccountBucketsAndMounts(accountId: string, account: Account) {
+        // Skip bucket and mount loading for the default account
+        if (accountId === DEFAULT_ACCOUNT_ID) {
+            return;
+        }
+
         // Load buckets
         const { data: buckets, error: bucketsError } = await publicdb
             .from('buckets')
@@ -356,13 +368,14 @@ class ConfigManager {
             }));
 
             // Upload to GCS using pipe capability
-            await gcsUtil.uploadData(
+            //Removed await for speed up.
+            gcsUtil.uploadData(
                 JSON.stringify(instancesData, null, 2),
                 bucketName,
                 'bot-instances/instances.json'
             );
 
-            await gcsUtil.uploadData(
+            gcsUtil.uploadData(
                 JSON.stringify(projectsData, null, 2),
                 bucketName,
                 'bot-instances/projects.json'
@@ -534,6 +547,20 @@ class ConfigManager {
                 return undefined;
             }
         }
+        
+        // If account is still not found or missing critical data, try inheritance from default account
+        if (!account || !account.roles || Object.keys(account.roles).length === 0) {
+            const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+            if (defaultAccount) {
+                if (!account) {
+                    account = defaultAccount;
+                } else {
+                    // Merge with default account data
+                    account = this.mergeWithDefaultAccount(account, defaultAccount);
+                }
+            }
+        }
+        
         return account;
     }
 
@@ -578,11 +605,79 @@ class ConfigManager {
     }
 
     public async getRoles(accountId:string): Promise<{ [key: string]: BotSettings }> {
-        return (await this.getAccount(accountId))?.roles??{};
+        const account = await this.getAccount(accountId);
+        const accountRoles = account?.roles ?? {};
+        
+        // If account has no roles, inherit all roles from default account
+        if (Object.keys(accountRoles).length === 0) {
+            const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+            return defaultAccount?.roles ?? {};
+        }
+        
+        // Merge account roles with missing roles from default account
+        const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+        const defaultRoles = defaultAccount?.roles ?? {};
+        
+        // Add missing roles from default account to the result
+        const mergedRoles = { ...accountRoles };
+        for (const [roleName, roleSettings] of Object.entries(defaultRoles)) {
+            if (!mergedRoles[roleName]) {
+                mergedRoles[roleName] = roleSettings;
+            }
+        }
+        
+        // TODO: In future version, add support for marking roles as 'deleted' in Supabase
+        // so they can be excluded even if they exist in the default account
+        
+        return mergedRoles;
+    }
+
+    public async getRoleData(accountId:string, role:string): Promise<BotSettings|undefined> {
+        const account = await this.getAccount(accountId);
+        const accountRole = account?.roles?.[role];
+        
+        // If role exists in account, return it
+        if (accountRole) {
+            return accountRole;
+        }
+        
+        // If role doesn't exist in account, try to get it from default account
+        const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+        return defaultAccount?.roles?.[role];
     }
 
     public async getGitKeys(accountId:string): Promise<any[]> {
         return (await this.getAccount(accountId))?.gitKeys??[];
+    }
+
+    private async loadDefaultAccount(): Promise<Account | undefined> {
+        try {
+            return await this.loadUpdateAccount(DEFAULT_ACCOUNT_ID);
+        } catch (error) {
+            console.error('Error loading default account:', error);
+            return undefined;
+        }
+    }
+
+    private mergeWithDefaultAccount(account: Account, defaultAccount: Account): Account {
+        // Merge roles from default account if they don't exist in the current account
+        if (!account.roles || Object.keys(account.roles).length === 0) {
+            account.roles = defaultAccount.roles;
+        } else {
+            // Add missing roles from default account
+            for (const [roleName, roleSettings] of Object.entries(defaultAccount.roles)) {
+                if (!account.roles[roleName]) {
+                    account.roles[roleName] = roleSettings;
+                }
+            }
+        }
+
+        // Merge settings if they don't exist
+        if (!account.settings || Object.keys(account.settings).length === 0) {
+            account.settings = defaultAccount.settings;
+        }
+
+        return account;
     }
 
     public async getServiceAccount(accountId: string): Promise<any | undefined> {

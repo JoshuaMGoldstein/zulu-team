@@ -5,7 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { log } from './utils/log';
 import * as dotenv from 'dotenv';
-import { Bot, BotOutput, BotEvent, BotEventType, BotSettings, Project, DelegationBotEvent, DiscordBotEvent } from './bots/types';
+import { Bot, BotOutput, BotEvent, BotEventType, BotSettings, Project, DelegationBotEvent, DiscordBotEvent, InheritedBoolean } from './bots/types';
 import { GeminiToolCall } from './bots/gemini';
 import { Message } from 'discord.js';
 import { sendChunkedMessage } from './utils/discord';
@@ -141,10 +141,26 @@ class DockerManager {
         const containerName = this.getContainerName(instance);
         const projectPath = `/workspace/${project.name}`;
 
+        // Check if bot has mount-bot-instances privileges
+        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+        
         try {
             const exists = await this.docker.fsExists(containerName, `${projectPath}/.git`);
             if (exists) {
                 log(`Project ${project.name} already exists for instance ${instance.id}.`);
+                
+                // For bots with mount privilege, try reset-to-origin workflow for faster startup
+                if (hasMountPrivilege) {
+                    try {
+                        const context = await workflowManager.buildGitContext(this.docker, containerName, project);
+                        await workflowManager.executeWorkflow('reset-to-origin', context);
+                        log(`Project ${project.name} reset to origin for instance ${instance.id}.`);
+                        return;
+                    } catch (resetError) {
+                        log(`Reset-to-origin failed for ${project.name}, continuing with normal flow:`, resetError);
+                        // Continue with normal flow if reset fails
+                    }
+                }
                 return; // .git directory exists, so we skip cloning
             }
         } catch (error) {
@@ -173,16 +189,51 @@ class DockerManager {
             throw new Error(`_runActivation instance.account_id ${instance.account_id} != event.account_id ${event.account_id}`);
         }
 
-
         const env:Record<string,string> = {}; 
         Object.assign(env,instance.env);
         env.EVENT_ID = event.id; 
 
-        // Existing activation logic (cloning and container exec)
+        // Check if bot has mount-bot-instances privileges
+        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+        
+        // Determine working directory based on privileges
+        let workingDir = '/workspace';
+        if (!hasMountPrivilege) {
+            // Developers without mount privilege work in project-specific directory
+            if (event instanceof DelegationBotEvent) {
+                workingDir = `/workspace/${event.project}`;
+            } else if (event instanceof DiscordBotEvent) {
+                const commsEvent = event as DiscordBotEvent;
+                if (commsEvent.channelProjects.length > 0) {
+                    workingDir = `/workspace/${commsEvent.channelProjects[0]}`;
+                }
+            }
+        }
+
+        // Set working directory in environment
+        env.WORKING_DIR = workingDir;
+
+        // Optimized git logic for repeated activations
         if (event instanceof DelegationBotEvent) {
             const project = (await configManager.getProjects(instance.account_id)).find(p => p.name === event.project);
             if (project) {
-                await this.cloneProject(instance, project);
+                // For bots with mount privilege, try reset-to-origin first for faster startup
+                if (hasMountPrivilege) {
+                    try {
+                        const containerName = this.getContainerName(instance);
+                        const context = await workflowManager.buildGitContext(this.docker, containerName, project);
+                        await workflowManager.executeWorkflow('reset-to-origin', context);
+                        log(`Project ${project.name} reset to origin for instance ${instance.id}.`);
+                    } catch (resetError) {
+                        log(`Reset-to-origin failed for ${project.name}, continuing with normal flow:`, resetError);
+                        // Continue with normal flow if reset fails
+                        await this.cloneProject(instance, project);
+                    }
+                } else {
+                    // For developers without mount privilege, always clone
+                    await this.cloneProject(instance, project);
+                }
+                
                 // Checkout specified branch if provided
                 if (event.branch) {
                     const containerName = this.getContainerName(instance);
@@ -224,20 +275,20 @@ class DockerManager {
         let cliCommand: string;
         if (instance.cli === 'gemini') {
             if (provider === 'moonshot') {
-                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}"`;
+                cliCommand = `gemini --autosave --resume --yolo --model "${modelFlag}"`;
             } else {
                 // openrouter
                 const preset = instance.preset === 'auto' ? '' : `@preset/${instance.preset}`;
-                cliCommand = `cd /workspace && gemini --autosave --resume --yolo --model "${modelFlag}${preset}" --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
+                cliCommand = `gemini --autosave --resume --yolo --model "${modelFlag}${preset}" --flashmodel "nousresearch/deephermes-3-mistral-24b-preview"`;
             }
         } else {
-            cliCommand = `cd /workspace && claude --dangerously-skip-permissions --continue --model ${instance.model}`;
+            cliCommand = `claude --dangerously-skip-permissions --continue --model ${instance.model}`;
         }
 
         const execOptions: ExecOptions = {
             user: 'exec',
             env: env,
-            cwd: '/workspace',
+            cwd: workingDir,
             stdin: true,
             files: instance.files
         };

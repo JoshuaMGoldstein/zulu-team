@@ -135,7 +135,14 @@ export class LocalDocker implements IDocker {
             }
         }
 
-        const command = `docker run -d --name "${containerName}" ${volumeArgs.join(' ')} ${envArgs.join(' ')} "${imageName}" sleep infinity`;
+        const labelArgs: string[] = [];
+        if(options?.labels) {
+            for (const [key,value] of Object.entries(options.labels)) {
+                labelArgs.push('-l', `${key}=${value}`);
+            }
+        }
+
+        const command = `docker run -d --name "${containerName}" ${volumeArgs.join(' ')} ${envArgs.join(' ')} ${labelArgs.join(' ')} "${imageName}" sleep infinity`;
         log(`Running container: ${containerName} with image: ${imageName}`);
         log(`Executing command: ${command}`);
         await execPromise(command);
@@ -313,6 +320,12 @@ export class LocalDocker implements IDocker {
         const { stdout } = await execPromise(command);
         const inspectData = JSON.parse(stdout)[0];
         
+        // Parse labels from inspect data
+        const labels: Record<string, string> = {};
+        if (inspectData.Config.Labels) {
+            Object.assign(labels, inspectData.Config.Labels);
+        }
+        
         return {
             name: inspectData.Name.replace(/^\//, ''),
             image: inspectData.Config.Image,
@@ -331,7 +344,8 @@ export class LocalDocker implements IDocker {
                 source: mount.Source,
                 destination: mount.Destination,
                 mode: mount.Mode || 'rw'
-            }))
+            })),
+            labels: labels
         };
     }
 
@@ -371,6 +385,29 @@ export class LocalDocker implements IDocker {
             containers,
             total: containers.length
         };
+    }
+
+    async updateLabels(containerName: string, labels: Record<string, string>): Promise<void> {
+        log(`Updating labels for container: ${containerName}`);
+        
+        // Build docker update command with labels
+        let command = `docker update`;
+        
+        // Add labels
+        for (const [key, value] of Object.entries(labels)) {
+            command += ` -l ${key}=${value}`;
+        }
+        
+        command += ` ${containerName}`;
+        
+        try {
+            await execPromise(command);
+        } catch (error) {
+            log(`Error updating labels for container ${containerName}: ${error}`);
+            throw error;
+        }
+        
+        log(`Labels updated for container: ${containerName}`);
     }
 }
 

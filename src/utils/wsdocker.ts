@@ -105,6 +105,7 @@ class WSDockerConnection {
     }
     public files: Record<string, string|Buffer> = {}
     public env: Record<string, string> = {}
+    public labels: Record<string, string> = {}
 }
 
 /**
@@ -119,7 +120,8 @@ export class WSDocker implements IDocker {
     private getEndpoint(imageName: string, containerName?: string): string {
         const endpoints: Record<string, string> = {
             'gemini-docker': process.env.DOCKER_ENDPOINT_GEMINI_DOCKER || 'ws://localhost:8088/ws',
-            'claude-docker': process.env.DOCKER_ENDPOINT_CLAUDE_DOCKER || 'ws://localhost:8089/ws'
+            'claude-docker': process.env.DOCKER_ENDPOINT_CLAUDE_DOCKER || 'ws://localhost:8089/ws',
+            'buildserver-docker': process.env.DOCKER_ENDPOINT_BUILDSERVER_DOCKER || 'ws://localhost:8090/ws'
         };
         let endpoint = endpoints[imageName] || endpoints['gemini-docker'];
         
@@ -242,6 +244,9 @@ export class WSDocker implements IDocker {
         // Store environment variables on the connection for later use
         connection.env = { ...options?.env };
         
+        // Store labels on the connection for later use
+        connection.labels = { ...options?.labels };
+        
         // Initialize files map if not exists
         if (!connection.files) connection.files = {};
         
@@ -269,7 +274,8 @@ export class WSDocker implements IDocker {
                 source,
                 destination: dest,
                 mode: 'rw'
-            }))
+            })),
+            labels: connection.labels || {}
         };
     }
 
@@ -494,6 +500,7 @@ fi
 
         // Return cached container info for WebSocket containers
         const containerEnv = connection.env;
+        const containerLabels = connection.labels || {};
         return {
             name: containerName,
             image: connection.imageName,
@@ -504,8 +511,23 @@ fi
                 workingDir: '/workspace',
                 user: 'exec'
             },
-            mounts: []
+            mounts: [],
+            labels: containerLabels
         };
+    }
+
+    async updateLabels(containerName: string, labels: Record<string, string>): Promise<void> {
+        const connection = this.connections.get(containerName);
+        if (!connection) {
+            throw new Error(`Container ${containerName} not found`);
+        }
+
+        // Update labels in the connection
+        connection.labels = { ...connection.labels, ...labels };
+
+        // In a real implementation, we would send a message to update the container labels
+        // For now, we'll just log the update
+        log(`Labels updated for container: ${containerName}`);
     }
 
     async ps(options?: PsOptions): Promise<ContainerList> {

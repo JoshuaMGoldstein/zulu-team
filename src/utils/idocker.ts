@@ -84,6 +84,14 @@ export interface IDocker {
      * @returns Promise resolving to list of containers
      */
     ps(options?: PsOptions): Promise<ContainerList>;
+
+    /**
+     * Update container labels
+     * @param containerName Name of the container
+     * @param labels Labels to update
+     * @returns Promise resolving when labels are updated
+     */
+    updateLabels(containerName: string, labels: Record<string, string>): Promise<void>;
 }
 
 export type DataListener = (data: Buffer) => void;
@@ -111,6 +119,8 @@ export interface RunOptions {
     files?: Record<string, string|Buffer>;    
     /** Whether to run container with privileged access (for FUSE mounting) */
     privileged?: boolean;
+    /** Labels to attach to the container */
+    labels?: Record<string, string>;
 }
 
 /**
@@ -187,6 +197,8 @@ export interface ContainerInfo {
         destination: string;
         mode: string;
     }>;
+    /** Container labels */
+    labels: Record<string, string>;
 }
 
 /**

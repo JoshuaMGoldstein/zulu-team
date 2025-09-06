@@ -181,12 +181,17 @@ export class WorkflowManager {
       const line = lines[i];
       const trimmedLine = line.trim();
       
-      // Skip empty lines and comments
-      if (!trimmedLine || trimmedLine.startsWith('#')) {
+      // Skip empty lines
+      if (!trimmedLine) {
         if (currentLine) {
           processedLines.push(currentLine.trim());
           currentLine = '';
         }
+        continue;
+      }
+      
+      // Skip comments
+      if (trimmedLine.startsWith('#')) {
         continue;
       }
       
@@ -415,7 +420,14 @@ export class WorkflowManager {
     // Check if source is in the provided files
     if (context.files[source]) {
       const content = context.files[source];
-      await context.docker.fsWriteFile(context.containerName, destination, content, undefined, { user: context.user });
+      // Respect the current working directory and expand ~/
+      let resolvedDestination = destination;
+      if (destination.startsWith('~/') || destination.startsWith('/')) {
+        resolvedDestination = destination;
+      } else if (!path.posix.isAbsolute(destination)) {
+        resolvedDestination = path.posix.join(context.workdir || '~/', destination);
+      }
+      await context.docker.fsWriteFile(context.containerName, resolvedDestination, content, undefined, { user: context.user });
     } else {
       throw new Error(`COPY source ${source} not found in provided files`);
     }

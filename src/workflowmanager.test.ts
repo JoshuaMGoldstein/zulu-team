@@ -25,9 +25,11 @@ const mockDocker: IDocker = {
     status: 'running',
     state: 'running',
     config: { env: {}, workingDir: '/workspace', user: 'exec' },
-    mounts: []
+    mounts: [],
+    labels: {}
   }),
-  ps: vi.fn().mockResolvedValue({ containers: [], total: 0 })
+  ps: vi.fn().mockResolvedValue({ containers: [], total: 0 }),
+  updateLabels: vi.fn().mockResolvedValue(undefined)
 };
 
 describe('WorkflowManager', () => {

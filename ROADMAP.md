@@ -6,18 +6,19 @@
 
 
 
-a.	PROJECT MOUNTING SYSTEM
- -  We need to support having SSH keys and mounting the GIT Repos for the bots.
- 
-b.	Commits and branches such
++a.	PROJECT MOUNTING SYSTEM
+ -  We need to support having SSH keys and mounting the GIT Repos for the bots. 
++b.	Commits and branches such
 -	We should determine the branch edits are being done on, the bot itself shouldn’t manage that.
 -	We should commit code for the bot only after its been tested by QA, etc.
 c.	Perhaps we will have an interactive system for the user to try things before committing /pushing code. Or perhaps we will commit but not push. May depend on global settings
+
 SETTINGS FOR MANAGING CONTEXT WINDOW, COMPRESSING, LIMITING HISTORY
 - Modify Gemini CLI to compact and limit context window usage
 -	
-d.	BOT REQUEST QUEUING SYSTEM
++d.	BOT REQUEST QUEUING SYSTEM
 -	Make sure bots can’t be processing two requests at once by having an ordered queuing system.
+
 e.	DEVOPS STUFF FOR PUBLISHING (Cloudflare, BunnyCDN?)
 - We need to support the ability to provide a link to access the project
 - I think the user should be able to access the project on the dev box itself, so maybe via Cloudflare tunneling?
@@ -44,25 +45,22 @@ PARAMETERS FOR DEPLOYMENT WORKFLOW (upcoming):
 
 
 f.	CREDENTIALS MANAGEMENT AND TOOLS
--
- 
+- 
 g.	STAGING/PROD PUBLISHING
 -	
 
-h.	INTEGRATE OPENAPI / OPENROUTER FOR GEMINI CLI
-
++h.	INTEGRATE OPENAPI / OPENROUTER FOR GEMINI CLI
 i.	SUPPORT CLAUDE AGAIN
-j.	MULTI-TENANT CAPABILITY? USE SUPABASE FOR SETTINGS?
+
++j.	MULTI-TENANT CAPABILITY? USE SUPABASE FOR SETTINGS?
 - Move all the .json files to Supabase PostgreSQL and support multi-tenant.
-
 k.	PER-PROJECT BOT CONTEXT CAPABILITY 
-
 l.	BRING YOUR OWN API KEYS?
 - Allow 
 m.	LIMIT BOT ACCESS TO API KEYS (/chat/completions)
 n.	RECORD USAGE STATISTICS, BILLING (/chat/competions)
 o.	What else?
-p.	FILESHARING SYSTEM FOR BOT-INSTANCES USING GSCFUSE
++p.	FILESHARING SYSTEM FOR BOT-INSTANCES USING GSCFUSE
 
 The settings.json file can also have an object called "autosave" added      │
 │   which includes  "compressafter": {tokencount}, "", "maxcheckpointitems": {number},

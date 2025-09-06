@@ -47,6 +47,10 @@ class DockerManager {
         return storedPromise;
     }
 
+    public getDocker(): IDocker {
+        return this.docker;
+    }
+
 
     private async getRunningContainers(): Promise<Map<string, string>> {
         const containerMap = new Map<string, string>();
@@ -160,7 +164,9 @@ class DockerManager {
         }
     }
 
-
+    private async doGitLogic(instance:Bot, event:BotEvent) {
+        
+    }
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
         if(event.account_id != instance.account_id) {

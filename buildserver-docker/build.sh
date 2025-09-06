@@ -5,7 +5,7 @@ rm /tmp/exec_token
 
 
 docker push us-east4-docker.pkg.dev/zulu-team/zulu-team/buildserver-docker:latest
-gcloud run deploy zulu-gemini-docker --image us-east4-docker.pkg.dev/zulu-team/zulu-team/buildserver-docker:latest \
+gcloud run deploy zulu-buildserver-docker --image us-east4-docker.pkg.dev/zulu-team/zulu-team/buildserver-docker:latest \
   --region us-east4 --allow-unauthenticated --min-instances=0 --max-instances=8 --concurrency=1 \
   --platform managed \
   --execution-environment=gen2

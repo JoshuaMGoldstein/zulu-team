@@ -110,22 +110,30 @@ class ConfigManager {
                 .eq('id', instance.role)
                 .eq('account_id', instance.account_id);
 
-            // If not found in current account, try to load from default account
-            if ((!roleData || roleData.length === 0) && instance.account_id !== DEFAULT_ACCOUNT_ID) {
-                const defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
-                if (defaultAccount && defaultAccount.roles[instance.role]) {
-                    // Use the role data from the default account
-                    const defaultRole = defaultAccount.roles[instance.role] as RoleSettings;
-                    if (defaultRole && defaultRole.md) {
-                        files[`/workspace/${cli.toUpperCase()}.md`] = defaultRole.md;
-                    }
-                }
-            } else if (!roleError && roleData.length >= 1 && roleData[0]?.md) {
+            // Check if role has .md content in current account
+            if (!roleError && roleData.length >= 1 && roleData[0]?.md) {
                 // Apply macro replacement to the role MD
                 const processedMd = templatemanager.replaceMacros(roleData[0].md, instance);
                 files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
             } else {
-                console.log(`Couldn't load .MD file for role: ${instance.role}`);
+                // Try to load from default account
+                if (instance.account_id !== DEFAULT_ACCOUNT_ID) {
+                    const defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+                    if (defaultAccount && defaultAccount.roles[instance.role]) {
+                        // Use the role data from the default account
+                        const defaultRole = defaultAccount.roles[instance.role] as RoleSettings;
+                        if (defaultRole && defaultRole.md) {
+                            // Apply macro replacement to the default role MD
+                            const processedMd = templatemanager.replaceMacros(defaultRole.md, instance);
+                            files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
+                        }
+                    }
+                }
+                
+                // Log if still no .md file found
+                if (!files[`/workspace/${cli.toUpperCase()}.md`]) {
+                    console.log(`Couldn't load .MD file for role: ${instance.role}`);
+                }
             }
 
             // Load container-specific settings from database

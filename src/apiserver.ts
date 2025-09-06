@@ -435,6 +435,186 @@ class ApiServer {
             }
         });
 
+        // Environment deployment and secrets management endpoints
+        this.app.post('/secrets/upload', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+            const { project_name, environment, secrets_content } = req.body;
+
+            if (!project_name || !environment || !secrets_content) {
+                return res.status(400).json({ 
+                    error: 'Missing required fields: project_name, environment, secrets_content' 
+                });
+            }
+
+            try {
+                // Create temporary file for secrets
+                const secretsFile = `/tmp/secrets-${account_id}-${project_name}-${environment}-${Date.now()}.env`;
+                fs.writeFileSync(secretsFile, secrets_content);
+
+                // Execute upload-secrets workflow
+                const context = {
+                    containerName: 'zulu-manager',
+                    docker: dockerManager.getDocker(),
+                    args: {
+                        ACCOUNT_ID: account_id,
+                        PROJECT_NAME: project_name,
+                        ENVIRONMENT: environment,
+                        SECRETS_FILE: secretsFile
+                    },
+                    files: {},
+                    env: {},
+                    user: 'git',
+                    workdir: `/workspace/${project_name}`
+                };
+
+                const result = await workflowManager.executeWorkflow('upload-secrets', context);
+                
+                // Clean up temporary file
+                fs.unlinkSync(secretsFile);
+
+                res.json({ 
+                    success: true, 
+                    message: `Secrets uploaded for ${project_name} (${environment})`,
+                    result 
+                });
+            } catch (error) {
+                log(`Error uploading secrets:`, error);
+                res.status(500).json({ 
+                    error: 'Failed to upload secrets', 
+                    details: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+
+        this.app.post('/deploy', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+            const { project_name, branch_name, environment } = req.body;
+
+            if (!project_name || !branch_name || !environment) {
+                return res.status(400).json({ 
+                    error: 'Missing required fields: project_name, branch_name, environment' 
+                });
+            }
+
+            try {
+                // Execute deploy-environment workflow
+                const context = {
+                    containerName: 'zulu-manager',
+                    docker: dockerManager.getDocker(),
+                    args: {
+                        ACCOUNT_ID: account_id,
+                        PROJECT_NAME: project_name,
+                        BRANCH_NAME: branch_name,
+                        ENVIRONMENT: environment
+                    },
+                    files: {},
+                    env: {},
+                    user: 'git',
+                    workdir: `/workspace/${project_name}`
+                };
+
+                const result = await workflowManager.executeWorkflow('deploy-environment', context);
+                
+                res.json({ 
+                    success: true, 
+                    message: `Deployment initiated for ${project_name} (${environment})`,
+                    result 
+                });
+            } catch (error) {
+                log(`Error deploying environment:`, error);
+                res.status(500).json({ 
+                    error: 'Failed to deploy environment', 
+                    details: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+
+        this.app.get('/environment/url', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+            const project_name = Array.isArray(req.query.project_name) ? req.query.project_name[0] : req.query.project_name;
+            const environment = Array.isArray(req.query.environment) ? req.query.environment[0] : req.query.environment;
+
+            if (!project_name || !environment) {
+                return res.status(400).json({ 
+                    error: 'Missing required fields: project_name, environment' 
+                });
+            }
+
+            try {
+                // Execute get-environment-url workflow
+                const context = {
+                    containerName: 'zulu-manager',
+                    docker: dockerManager.getDocker(),
+                    args: {
+                        ACCOUNT_ID: account_id,
+                        PROJECT_NAME: project_name as string,
+                        ENVIRONMENT: environment as string
+                    },
+                    files: {},
+                    env: {},
+                    user: 'git',
+                    workdir: `/workspace/${project_name}`
+                };
+
+                const result = await workflowManager.executeWorkflow('get-environment-url', context);
+                
+                res.json({ 
+                    success: true, 
+                    url: result,
+                    message: `Environment URL retrieved for ${project_name} (${environment})`
+                });
+            } catch (error) {
+                log(`Error getting environment URL:`, error);
+                res.status(500).json({ 
+                    error: 'Failed to get environment URL', 
+                    details: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+
+        this.app.post('/environment/test', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+            const { project_name, environment, test_command } = req.body;
+
+            if (!project_name || !environment) {
+                return res.status(400).json({ 
+                    error: 'Missing required fields: project_name, environment' 
+                });
+            }
+
+            try {
+                // Execute test-environment workflow
+                const context = {
+                    containerName: 'zulu-manager',
+                    docker: dockerManager.getDocker(),
+                    args: {
+                        ACCOUNT_ID: account_id,
+                        PROJECT_NAME: project_name,
+                        ENVIRONMENT: environment,
+                        TEST_COMMAND: test_command || 'curl -f ${SERVICE_URL}/health'
+                    },
+                    files: {},
+                    env: {},
+                    user: 'git',
+                    workdir: `/workspace/${project_name}`
+                };
+
+                const result = await workflowManager.executeWorkflow('test-environment', context);
+                
+                res.json({ 
+                    success: true, 
+                    message: `Environment tested successfully for ${project_name} (${environment})`,
+                    result 
+                });
+            } catch (error) {
+                log(`Error testing environment:`, error);
+                res.status(500).json({ 
+                    error: 'Failed to test environment', 
+                    details: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+
         this.app.post('/instance/:instanceId/delegated-task', async (req, res) => {
             const account_id = ApiServer.GetAccountId(req);
 

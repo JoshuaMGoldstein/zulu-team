@@ -116,17 +116,25 @@ class ConfigManager {
                 const processedMd = templatemanager.replaceMacros(roleData[0].md, instance);
                 files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
             } else {
+                console.log(`No .md found in current account for role ${instance.role}, checking default account`);
                 // Try to load from default account
                 if (instance.account_id !== DEFAULT_ACCOUNT_ID) {
                     const defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+                    console.log(`Default account object:`, defaultAccount);
                     if (defaultAccount && defaultAccount.roles[instance.role]) {
                         // Use the role data from the default account
                         const defaultRole = defaultAccount.roles[instance.role] as RoleSettings;
+                        console.log(`Default role object:`, defaultRole);
                         if (defaultRole && defaultRole.md) {
                             // Apply macro replacement to the default role MD
                             const processedMd = templatemanager.replaceMacros(defaultRole.md, instance);
                             files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
+                            console.log(`Successfully loaded .md from default account for role ${instance.role}`);
+                        } else {
+                            console.log(`Default role ${instance.role} exists but has no .md content`);
                         }
+                    } else {
+                        console.log(`Default account or role ${instance.role} not found in default account`);
                     }
                 }
                 
@@ -409,6 +417,13 @@ class ConfigManager {
     }
 
     public async loadUpdateAccount(accountId:string):Promise<Account> {
+        //First load the default account if it isnt already loaded.
+        let defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+        if(!defaultAccount) { 
+            defaultAccount = await this.loadDefaultAccount(); 
+            console.log(`Loaded default account:`, defaultAccount);
+        }
+
         let account = this.accounts.get(accountId);
         if(!account) account = new Account();
 

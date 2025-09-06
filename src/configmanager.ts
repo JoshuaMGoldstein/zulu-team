@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Model,Bot, Project, BotSettings, InheritedBoolean, Verbosity } from './bots/types';
+import { Model, Bot, Project, BotSettings, RoleSettings, InheritedBoolean, Verbosity } from './bots/types';
 import {log} from './utils/log'
 import { env } from 'process';
 import { stringify } from 'querystring';
@@ -107,9 +107,20 @@ class ConfigManager {
             const { data: roleData, error: roleError } = await publicdb
                 .from('roles')
                 .select('*')
-                .eq('id', instance.role)                
-            
-            if (!roleError && roleData.length>=1 && roleData[0]?.md) {
+                .eq('id', instance.role)
+                .eq('account_id', instance.account_id);
+
+            // If not found in current account, try to load from default account
+            if ((!roleData || roleData.length === 0) && instance.account_id !== DEFAULT_ACCOUNT_ID) {
+                const defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+                if (defaultAccount && defaultAccount.roles[instance.role]) {
+                    // Use the role data from the default account
+                    const defaultRole = defaultAccount.roles[instance.role] as RoleSettings;
+                    if (defaultRole && defaultRole.md) {
+                        files[`/workspace/${cli.toUpperCase()}.md`] = defaultRole.md;
+                    }
+                }
+            } else if (!roleError && roleData.length >= 1 && roleData[0]?.md) {
                 // Apply macro replacement to the role MD
                 const processedMd = templatemanager.replaceMacros(roleData[0].md, instance);
                 files[`/workspace/${cli.toUpperCase()}.md`] = processedMd;
@@ -512,8 +523,9 @@ class ConfigManager {
                     channelVerbosity: role.channel_verbosity || -1,
                     delegatedVerbosity: role.delegated_verbosity || -1,
                     mountBotInstances: role.mount_bot_instances || false,
-                    allowDelegation: role.allow_delegation || false
-                } as BotSettings;
+                    allowDelegation: role.allow_delegation || false,
+                    md: role.md || ''
+                } as RoleSettings;
             });
 
             // Get git keys
@@ -604,7 +616,7 @@ class ConfigManager {
         return (await this.getAccount(accountId))?.settings??undefined;
     }
 
-    public async getRoles(accountId:string): Promise<{ [key: string]: BotSettings }> {
+    public async getRoles(accountId:string): Promise<{ [key: string]: RoleSettings }> {
         const account = await this.getAccount(accountId);
         const accountRoles = account?.roles ?? {};
         
@@ -632,7 +644,7 @@ class ConfigManager {
         return mergedRoles;
     }
 
-    public async getRoleData(accountId:string, role:string): Promise<BotSettings|undefined> {
+    public async getRoleData(accountId:string, role:string): Promise<RoleSettings|undefined> {
         const account = await this.getAccount(accountId);
         const accountRole = account?.roles?.[role];
         

@@ -108,6 +108,10 @@ export interface BotSettings {
     allowDelegation?:InheritedBoolean;
 }
 
+export interface RoleSettings extends BotSettings {
+    md?: string;
+}
+
 enum BotEventSource {
     DISCORD = "discord",
     DELEGATION = "delegation"

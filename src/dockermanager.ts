@@ -141,13 +141,13 @@ class DockerManager {
         const containerName = this.getContainerName(instance);
         const projectPath = `/workspace/${project.name}`;
 
-        // Check if bot has mount-bot-instances privileges
-        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
-        
         try {
             const exists = await this.docker.fsExists(containerName, `${projectPath}/.git`);
             if (exists) {
                 log(`Project ${project.name} already exists for instance ${instance.id}.`);
+                
+                // Check if bot has mount-bot-instances privileges
+                const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
                 
                 // For bots with mount privilege, try reset-to-origin workflow for faster startup
                 if (hasMountPrivilege) {
@@ -180,8 +180,92 @@ class DockerManager {
         }
     }
 
-    private async doGitLogic(instance:Bot, event:BotEvent) {
+    private async doGitLogic(instance:Bot, event:BotEvent, project: Project, branch?: string): Promise<void> {
+        const containerName = this.getContainerName(instance);
         
+        // Check if bot has mount-bot-instances privileges for metadata access
+        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+        
+        // Setup main project
+        await this.setupProjectBranch(instance, project, branch);
+        
+        // Setup metadata project if bot has mount privilege
+        if (hasMountPrivilege) {
+            const metadataProject: Project = {
+                ...project,
+                name: `${project.name}-metadata`,
+                repositoryUrl: project.repositoryUrl.replace('.git', '-metadata.git')
+            };
+            await this.setupProjectBranch(instance, metadataProject, branch);
+        }
+    }
+
+    private async setupProjectBranch(instance: Bot, project: Project, branch?: string): Promise<void> {
+        const containerName = this.getContainerName(instance);
+        const projectPath = `/workspace/${project.name}`;
+        
+        try {
+            // Check if project already exists and get current branch from container labels
+            const exists = await this.docker.fsExists(containerName, `${projectPath}/.git`);
+            let currentBranch: string | undefined;
+            
+            if (exists) {
+                try {
+                    const containerInfo = await this.docker.inspect(containerName);
+                    currentBranch = containerInfo.labels[`zulu.project.${project.name}.branch`];
+                } catch (labelError) {
+                    log(`Error reading container labels for ${project.name}:`, labelError);
+                }
+                
+                // If same branch and no explicit branch requested, try reset-to-origin for faster startup
+                if (!branch && currentBranch) {
+                    try {
+                        const context = await workflowManager.buildGitContext(this.docker, containerName, project, currentBranch);
+                        await workflowManager.executeWorkflow('reset-to-origin', context);
+                        log(`Project ${project.name} reset to origin for instance ${instance.id}.`);
+                        return;
+                    } catch (resetError) {
+                        log(`Reset-to-origin failed for ${project.name}, continuing with normal flow:`, resetError);
+                        // Continue with normal flow if reset fails
+                    }
+                }
+            }
+            
+            // If we need a specific branch that's different from current, or reset failed, do full setup
+            const targetBranch = branch || currentBranch || 'main';
+            
+            if (!exists || (branch && branch !== currentBranch)) {
+                // Clone project if it doesn't exist
+                if (!exists) {
+                    const cloneContext = await workflowManager.buildGitContext(this.docker, containerName, project);
+                    await workflowManager.executeWorkflow('clone-project', cloneContext);
+                    log(`Project ${project.name} cloned successfully for instance ${instance.id}.`);
+                }
+                
+                // Set branch if different from current or explicitly requested
+                if (targetBranch !== currentBranch) {
+                    const branchContext = await workflowManager.buildGitContext(this.docker, containerName, project, targetBranch);
+                    await workflowManager.executeWorkflow('set-branch', branchContext);
+                    log(`Checked out branch ${targetBranch} for project ${project.name}`);
+                }
+            }
+            
+            // Update container labels to track current project and branch
+            const labels: Record<string, string> = {};
+            labels[`zulu.project.${project.name}.branch`] = targetBranch;
+            labels[`zulu.project.${project.name}.updated`] = new Date().toISOString();
+            
+            try {
+                await this.docker.updateLabels(containerName, labels);
+            } catch (labelError) {
+                log(`Error updating container labels for ${project.name}:`, labelError);
+                // Non-critical, continue
+            }
+            
+        } catch (error) {
+            log(`Error setting up project ${project.name} for instance ${instance.id}:`, error);
+            throw error;
+        }
     }
 
     private async _runActivation(instance: Bot, event: BotEvent, statusMessage?: Message): Promise<BotOutput> {
@@ -213,38 +297,11 @@ class DockerManager {
         // Set working directory in environment
         env.WORKING_DIR = workingDir;
 
-        // Optimized git logic for repeated activations
+        // Setup git repositories for all projects
         if (event instanceof DelegationBotEvent) {
             const project = (await configManager.getProjects(instance.account_id)).find(p => p.name === event.project);
             if (project) {
-                // For bots with mount privilege, try reset-to-origin first for faster startup
-                if (hasMountPrivilege) {
-                    try {
-                        const containerName = this.getContainerName(instance);
-                        const context = await workflowManager.buildGitContext(this.docker, containerName, project);
-                        await workflowManager.executeWorkflow('reset-to-origin', context);
-                        log(`Project ${project.name} reset to origin for instance ${instance.id}.`);
-                    } catch (resetError) {
-                        log(`Reset-to-origin failed for ${project.name}, continuing with normal flow:`, resetError);
-                        // Continue with normal flow if reset fails
-                        await this.cloneProject(instance, project);
-                    }
-                } else {
-                    // For developers without mount privilege, always clone
-                    await this.cloneProject(instance, project);
-                }
-                
-                // Checkout specified branch if provided
-                if (event.branch) {
-                    const containerName = this.getContainerName(instance);
-                    try {
-                        const context = await workflowManager.buildGitContext(this.docker, containerName, project, event.branch);
-                        await workflowManager.executeWorkflow('set-branch', context);
-                        log(`Checked out branch ${event.branch} for project ${project.name}`);
-                    } catch (err) {
-                        log(`Failed to checkout branch ${event.branch} for project ${project.name}:`, err);
-                    }
-                }
+                await this.doGitLogic(instance, event, project, event.branch);
             }
         } else if (event instanceof DiscordBotEvent) {
             const commsEvent = event as DiscordBotEvent;
@@ -252,7 +309,7 @@ class DockerManager {
                 const projectName = commsEvent.channelProjects[p];
                 const project = (await configManager.getProjects(instance.account_id)).find(p => p.name === projectName);
                 if (project) {
-                    await this.cloneProject(instance, project);
+                    await this.doGitLogic(instance, event, project);
                 }
             }
         }

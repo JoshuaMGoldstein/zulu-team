@@ -528,6 +528,9 @@ class ConfigManager {
             
             if (instancesError) throw instancesError;
             
+            // Clear existing instances before loading new ones
+            account.instances = [];
+            
             if(instances) {
                 for(var i=0; i<instances.length; i++) {
                     let inst = instances[i];
@@ -561,6 +564,8 @@ class ConfigManager {
                 .eq('account_id', accountId);
             
             if (projectsError) throw projectsError;
+            // Clear existing projects before loading new ones
+            account.projects = [];
             account.projects = (projects || []).map(project => ({
                 account_id:project.account_id,
                 id: project.id,
@@ -599,6 +604,7 @@ class ConfigManager {
                 .eq('account_id', accountId);
             
             if (rolesError) throw rolesError;
+            // Clear existing roles before loading new ones
             account.roles = {};
             roles?.forEach(role => {
                 account.roles[role.id] = {
@@ -620,6 +626,8 @@ class ConfigManager {
                 .eq('account_id', accountId);
             
             if (gitKeysError) throw gitKeysError;
+            // Clear existing git keys before loading new ones
+            account.gitKeys = [];
             account.gitKeys = (gitKeys || []).map(key => ({
                 id: key.id,
                 name: key.name,

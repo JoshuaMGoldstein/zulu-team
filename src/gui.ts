@@ -1,7 +1,7 @@
 import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ClaudeModels, GeminiModels } from './bots/types';
+import cors from 'cors';
 import configManager from './configmanager';
 import { publicdb } from './supabase';
 
@@ -54,21 +54,41 @@ const authenticateUser = async (req: express.Request, res: express.Response, nex
 
 export const createGui = () => {
     const app = express();
+    
     app.use(express.json());
-    app.use(express.static(path.join(__dirname, '../public')));    
+    app.use(express.static(path.join(__dirname, '../public')));
+
+    // CORS configuration for API endpoints
+    const corsOptions = {
+        origin: [
+            'http://localhost:5173',  // Vue dev server
+            'http://localhost:4173',  // Vue preview server
+            'http://localhost:3000',  // Main app
+            'http://zulu-api.warmerise.co',  // Production API
+            'https://zulu-api.warmerise.co',  // Production API HTTPS
+            'https://b9955f70-eeb0-4ba6-85a6-4f7e0e1f85b2-zulu-www-sta-35i7o75mma-uk.a.run.app'  // Cloud Run Vue app
+        ],
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'AccountId'],
+        optionsSuccessStatus: 200 // Some legacy browsers choke on 204
+    };
+
+    // Apply CORS to all API routes
+    app.use(cors(corsOptions));
 
 
     // Reload endpoint
     app.post('/api/reload-configs', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        await configManager.loadUpdateAccount(accountId);
+        await configManager.getAccount(accountId);
         res.status(200).send();
     });
 
     // Settings routes
     app.get('/api/settings', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.settings || {});
     });
 
@@ -86,33 +106,74 @@ export const createGui = () => {
         }
         
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.settings);
     });
 
 
-    // Template routes
-    app.get('/api/templates/:role', (req, res) => {
+    // Template routes - Templates are stored in the roles table as 'md' field
+    app.get('/api/templates/:role', authenticateUser, async (req, res) => {
         const role = req.params.role;
-        const templatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
-        if (fs.existsSync(templatePath)) {
-            res.sendFile(templatePath);
-        } else {
-            res.status(404).send('Template not found');
+        const accountId = (req as any).accountId;
+        
+        try {
+            // Get template from roles table where the .md content is stored
+            const { data, error } = await publicdb
+                .from('roles')
+                .select('md')
+                .eq('account_id', accountId)
+                .eq('key', role)
+                .single();
+            
+            if (error || !data || !data.md) {
+                // Fallback to default template if not found in database
+                const defaultTemplatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
+                if (fs.existsSync(defaultTemplatePath)) {
+                    const content = fs.readFileSync(defaultTemplatePath, 'utf-8');
+                    res.send(content);
+                } else {
+                    res.status(404).send('Template not found');
+                }
+            } else {
+                res.send(data.md);
+            }
+        } catch (error) {
+            console.error('Error fetching template:', error);
+            res.status(500).json({ error: 'Failed to fetch template' });
         }
     });
 
-    app.put('/api/templates/:role', (req, res) => {
+    app.put('/api/templates/:role', authenticateUser, async (req, res) => {
         const role = req.params.role;
-        const templatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
-        fs.writeFileSync(templatePath, req.body);
-        res.status(200).send();
+        const accountId = (req as any).accountId;
+        const content = req.body;
+        
+        try {
+            // Update template in roles table - the 'md' field contains the template content
+            const { error } = await publicdb
+                .from('roles')
+                .update({
+                    md: content,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('account_id', accountId)
+                .eq('key', role);
+            
+            if (error) {
+                return res.status(500).json({ error: error.message });
+            }
+            
+            res.status(200).send();
+        } catch (error) {
+            console.error('Error saving template:', error);
+            res.status(500).json({ error: 'Failed to save template' });
+        }
     });
 
     // Role routes
     app.get('/api/roles', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.roles || {});
     });
 
@@ -142,7 +203,7 @@ export const createGui = () => {
         }
         
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.status(201).json(account?.roles[newRole.id]);
     });
 
@@ -172,7 +233,7 @@ export const createGui = () => {
         }
         
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         if (account?.roles[req.params.id]) {
             res.json(account.roles[req.params.id]);
         } else {
@@ -181,30 +242,91 @@ export const createGui = () => {
     });
 
 
-    // Model routes
-    app.get('/api/models', (req, res) => {
-        const modelsPath = path.join(__dirname, '../models.json');
-        if (fs.existsSync(modelsPath)) {
-            res.sendFile(modelsPath);
-        } else {
-            res.json({ toolmodels: [], flashmodels: [] });
+    // Model routes - Converted to use Supabase
+    app.get('/api/models', async (req, res) => {
+        try {
+            // Get models from Supabase
+            const { data: models, error } = await publicdb
+                .from('models')
+                .select('*')
+                .order('display_name', { ascending: true });
+            
+            if (error) {
+                console.error('Error fetching models:', error);
+                // Fallback to local file if Supabase fails
+                const modelsPath = path.join(__dirname, '../models.json');
+                if (fs.existsSync(modelsPath)) {
+                    const fileContent = fs.readFileSync(modelsPath, 'utf-8');
+                    res.json(JSON.parse(fileContent));
+                } else {
+                    res.json({ toolmodels: [], flashmodels: [] });
+                }
+            } else {
+                // Transform Supabase data to expected format
+                const toolmodels = models?.filter(m => m.category === 'tool').map(m => ({
+                    id: m.id,
+                    name: m.display_name || m.name,
+                    description: m.description || '',
+                    provider: m.provider,
+                    supported_parameters: m.supported_parameters || []
+                })) || [];
+                
+                const flashmodels = models?.filter(m => m.category === 'flash').map(m => ({
+                    id: m.id,
+                    name: m.display_name || m.name,
+                    description: m.description || '',
+                    provider: m.provider,
+                    supported_parameters: m.supported_parameters || []
+                })) || [];
+                
+                res.json({ toolmodels, flashmodels });
+            }
+        } catch (error) {
+            console.error('Error in models endpoint:', error);
+            res.status(500).json({ error: 'Failed to fetch models' });
         }
     });
 
-    // Preset routes
-    app.get('/api/presets', (req, res) => {
-        const presetsPath = path.join(__dirname, '../presets.json');
-        if (fs.existsSync(presetsPath)) {
-            res.sendFile(presetsPath);
-        } else {
-            res.json([]);
+    // Preset routes - Converted to use Supabase
+    app.get('/api/presets', async (req, res) => {
+        try {
+            // Get presets from Supabase
+            const { data: presets, error } = await publicdb
+                .from('presets')
+                .select('*')
+                .order('name', { ascending: true });
+            
+            if (error) {
+                console.error('Error fetching presets:', error);
+                // Fallback to local file if Supabase fails
+                const presetsPath = path.join(__dirname, '../presets.json');
+                if (fs.existsSync(presetsPath)) {
+                    const fileContent = fs.readFileSync(presetsPath, 'utf-8');
+                    res.json(JSON.parse(fileContent));
+                } else {
+                    res.json([]);
+                }
+            } else {
+                // Transform Supabase data to expected format
+                const transformedPresets = presets?.map(preset => ({
+                    id: preset.id,
+                    name: preset.name,
+                    description: preset.preset || '', // Use 'preset' field as description
+                    settings: {} // No settings field in current schema
+                })) || [];
+                
+                res.json(transformedPresets);
+            }
+        } catch (error) {
+            console.error('Error in presets endpoint:', error);
+            res.status(500).json({ error: 'Failed to fetch presets' });
         }
     });
 
     // Bot routes
     app.get('/api/bots', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.instances.map(bot => ({
             id: bot.id,
             name: bot.name,
@@ -252,7 +374,7 @@ export const createGui = () => {
         }
 
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         const bot = account?.instances.find(b => b.id === newBotData.id);
         res.status(201).json(bot);
     });
@@ -262,7 +384,7 @@ export const createGui = () => {
         const updatedBotData = req.body;
         
         // Get existing bot to preserve fields not being updated
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         const existingBot = account?.instances.find(b => b.id === req.params.id);
         
         if (!existingBot) {
@@ -295,7 +417,7 @@ export const createGui = () => {
         }
 
         // Update in memory
-        const updatedAccount = await configManager.loadUpdateAccount(accountId);
+        const updatedAccount = await configManager.getAccount(accountId);
         const bot = updatedAccount?.instances.find(b => b.id === req.params.id);
         res.json(bot);
     });
@@ -303,7 +425,7 @@ export const createGui = () => {
     // Project routes
     app.get('/api/projects', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.projects.map(project => ({
             id: project.id,
             name: project.name,
@@ -344,7 +466,7 @@ export const createGui = () => {
         }
 
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         const project = account?.projects.find(p => p.id === newProjectData.id);
         res.status(201).json(project);
     });
@@ -354,7 +476,7 @@ export const createGui = () => {
         const updatedProjectData = req.body;
         
         // Get existing project to preserve fields not being updated
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         const existingProject = account?.projects.find(p => p.id === req.params.id);
         
         if (!existingProject) {
@@ -382,15 +504,15 @@ export const createGui = () => {
         }
 
         // Update in memory
-        const updatedAccount = await configManager.loadUpdateAccount(accountId);
+        const updatedAccount = await configManager.getAccount(accountId);
         const project = updatedAccount?.projects.find(p => p.id === req.params.id);
         res.json(project);
     });
 
     // Git Key routes
-    app.get('/api/gitkeys', authenticateUser, async (req, res) => {
+    app.get('/api/gitkeys',  authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         res.json(account?.gitKeys || []);
     });
 
@@ -413,7 +535,7 @@ export const createGui = () => {
         }
 
         // Update in memory
-        const account = await configManager.loadUpdateAccount(accountId);
+        const account = await configManager.getAccount(accountId);
         const key = account?.gitKeys.find(k => k.id === newKey.id);
         res.status(201).json(key);
     });
@@ -433,11 +555,11 @@ export const createGui = () => {
         }
 
         // Update in memory
-        await configManager.loadUpdateAccount(accountId);
+        await configManager.getAccount(accountId);
         res.status(204).send();
     });
 
-    app.post('/api/register', async (req, res) => {
+    app.post('/api/register',  async (req, res) => {
         const { email, password } = req.body;
         try {
             const { data, error } = await publicdb.auth.signUp({

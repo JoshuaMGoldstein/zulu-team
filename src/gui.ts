@@ -1,6 +1,4 @@
 import express from 'express';
-import * as fs from 'fs';
-import * as path from 'path';
 import cors from 'cors';
 import configManager from './configmanager';
 import { publicdb } from './supabase';
@@ -56,11 +54,13 @@ export const createGui = () => {
     const app = express();
     
     app.use(express.json());
-    app.use(express.static(path.join(__dirname, '../public')));
 
     // CORS configuration for API endpoints
     const corsOptions = {
         origin: [
+            'http://127.0.0.1:5173',  // Vue dev server
+            'http://127.0.0.1:4173',  // Vue preview server
+            'http://127.0.0.1:3000',  // Main app
             'http://localhost:5173',  // Vue dev server
             'http://localhost:4173',  // Vue preview server
             'http://localhost:3000',  // Main app
@@ -122,17 +122,22 @@ export const createGui = () => {
                 .from('roles')
                 .select('md')
                 .eq('account_id', accountId)
-                .eq('key', role)
+                .eq('id', role)
                 .single();
             
             if (error || !data || !data.md) {
-                // Fallback to default template if not found in database
-                const defaultTemplatePath = path.join(__dirname, `../templates/roles/${role}/GEMINI.md`);
-                if (fs.existsSync(defaultTemplatePath)) {
-                    const content = fs.readFileSync(defaultTemplatePath, 'utf-8');
-                    res.send(content);
-                } else {
+                // Try fallback to default account if not found in user's account
+                const { data: defaultData, error: defaultError } = await publicdb
+                    .from('roles')
+                    .select('md')
+                    .eq('account_id', configManager.DEFAULT_ACCOUNT_ID)
+                    .eq('id', role)
+                    .single();
+                
+                if (defaultError || !defaultData || !defaultData.md) {
                     res.status(404).send('Template not found');
+                } else {
+                    res.send(defaultData.md);
                 }
             } else {
                 res.send(data.md);
@@ -170,11 +175,23 @@ export const createGui = () => {
         }
     });
 
-    // Role routes
+    // Role routes - Return roles with proper ID field
     app.get('/api/roles', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
         const account = await configManager.getAccount(accountId);
-        res.json(account?.roles || {});
+        
+        // Transform roles object to include proper id field for UI
+        const rolesWithIds:any = {};
+        if (account?.roles) {
+            Object.entries(account.roles).forEach(([key, role]) => {
+                rolesWithIds[key] = {
+                    ...role,
+                    id: key // Add id field from the object key
+                };
+            });
+        }
+        
+        res.json(rolesWithIds || {});
     });
 
     app.post('/api/roles', authenticateUser, async (req, res) => {
@@ -242,7 +259,7 @@ export const createGui = () => {
     });
 
 
-    // Model routes - Converted to use Supabase
+    // Model routes - Pure Supabase implementation
     app.get('/api/models', async (req, res) => {
         try {
             // Get models from Supabase
@@ -253,14 +270,7 @@ export const createGui = () => {
             
             if (error) {
                 console.error('Error fetching models:', error);
-                // Fallback to local file if Supabase fails
-                const modelsPath = path.join(__dirname, '../models.json');
-                if (fs.existsSync(modelsPath)) {
-                    const fileContent = fs.readFileSync(modelsPath, 'utf-8');
-                    res.json(JSON.parse(fileContent));
-                } else {
-                    res.json({ toolmodels: [], flashmodels: [] });
-                }
+                res.status(500).json({ error: 'Failed to fetch models' });
             } else {
                 // Transform Supabase data to expected format
                 const toolmodels = models?.filter(m => m.category === 'tool').map(m => ({
@@ -287,7 +297,7 @@ export const createGui = () => {
         }
     });
 
-    // Preset routes - Converted to use Supabase
+    // Preset routes - Pure Supabase implementation
     app.get('/api/presets', async (req, res) => {
         try {
             // Get presets from Supabase
@@ -298,14 +308,7 @@ export const createGui = () => {
             
             if (error) {
                 console.error('Error fetching presets:', error);
-                // Fallback to local file if Supabase fails
-                const presetsPath = path.join(__dirname, '../presets.json');
-                if (fs.existsSync(presetsPath)) {
-                    const fileContent = fs.readFileSync(presetsPath, 'utf-8');
-                    res.json(JSON.parse(fileContent));
-                } else {
-                    res.json([]);
-                }
+                res.status(500).json({ error: 'Failed to fetch presets' });
             } else {
                 // Transform Supabase data to expected format
                 const transformedPresets = presets?.map(preset => ({
@@ -323,20 +326,19 @@ export const createGui = () => {
         }
     });
 
-    // Bot routes
+    // Bot routes - Return bot instances with proper IDs
     app.get('/api/bots', authenticateUser, async (req, res) => {
         const accountId = (req as any).accountId;
         const account = await configManager.getAccount(accountId);
         res.json(account?.instances.map(bot => ({
-            id: bot.id,
+            id: bot.id,                    // Instance ID (primary identifier)
+            bot_id: bot.bot_id,           // Bot type ID
             name: bot.name,
             role: bot.role,
             cli: bot.cli,
             enabled: bot.enabled,
             model: bot.model,
             preset: bot.preset,
-            //discordBotToken: bot.discordBotToken,
-            //discordChannelId: bot.discordChannelId,
             managedProjects: bot.managedProjects,
             lastActivity: bot.lastActivity,
             workingDirectory: bot.workingDirectory
@@ -433,6 +435,7 @@ export const createGui = () => {
             repositoryUrl: project.repositoryUrl,
             assignedQa: project.assignedQa,
             discordChannelIds: project.discordChannelIds,
+            gitKeyId: project.gitKeyId, // Include gitKeyId in response
             createdAt: project.createdAt,
             updatedAt: project.updatedAt
         })) || []);

@@ -18,8 +18,6 @@ import gcsUtil from './utils/gs';
 
 dotenv.config();
 
-const DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';
-
 
 type Bot_Instance = Database['public']['Tables']['bot_instances']['Row'];
 
@@ -35,6 +33,7 @@ class Account {
 }
 
 class ConfigManager {
+    public readonly DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';    
     private accounts:Map<string,Account> = new Map(); //map from accountID to Account
 
     private toolModels:Model[];
@@ -118,8 +117,8 @@ class ConfigManager {
             } else {
                 console.log(`No .md found in current account for role ${instance.role}, checking default account`);
                 // Try to load from default account
-                if (instance.account_id !== DEFAULT_ACCOUNT_ID) {
-                    const defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+                if (instance.account_id !== this.DEFAULT_ACCOUNT_ID) {
+                    const defaultAccount = this.accounts.get(this.DEFAULT_ACCOUNT_ID);
                     console.log(`Default account object:`, defaultAccount);
                     if (defaultAccount && defaultAccount.roles[instance.role]) {
                         // Use the role data from the default account
@@ -172,7 +171,7 @@ class ConfigManager {
 
     private async initializeGCSResources(accountId: string) {
         // Skip GCS resource initialization for the default account
-        if (accountId === DEFAULT_ACCOUNT_ID) {
+        if (accountId === this.DEFAULT_ACCOUNT_ID) {
             return;
         }
 
@@ -350,7 +349,7 @@ class ConfigManager {
 
     private async loadAccountBucketsAndMounts(accountId: string, account: Account) {
         // Skip bucket and mount loading for the default account
-        if (accountId === DEFAULT_ACCOUNT_ID) {
+        if (accountId === this.DEFAULT_ACCOUNT_ID) {
             return;
         }
 
@@ -477,8 +476,8 @@ class ConfigManager {
 
     public async loadUpdateAccount(accountId:string):Promise<Account> {
         //First load the default account if it isnt already loaded.
-        if(accountId != DEFAULT_ACCOUNT_ID) {
-            let defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+        if(accountId != this.DEFAULT_ACCOUNT_ID) {
+            let defaultAccount = this.accounts.get(this.DEFAULT_ACCOUNT_ID);
             if(!defaultAccount) { 
                 defaultAccount = await this.loadDefaultAccount(); 
                 console.log(`Loaded default account:`, defaultAccount);
@@ -655,7 +654,7 @@ class ConfigManager {
         
         // If account is still not found or missing critical data, try inheritance from default account
         if (!account || !account.roles || Object.keys(account.roles).length === 0) {
-            const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+            const defaultAccount = await this.getAccount(this.DEFAULT_ACCOUNT_ID);
             if (defaultAccount) {
                 if (!account) {
                     account = defaultAccount;
@@ -715,12 +714,12 @@ class ConfigManager {
         
         // If account has no roles, inherit all roles from default account
         if (Object.keys(accountRoles).length === 0) {
-            const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+            const defaultAccount = await this.getAccount(this.DEFAULT_ACCOUNT_ID);
             return defaultAccount?.roles ?? {};
         }
         
         // Merge account roles with missing roles from default account
-        const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+        const defaultAccount = await this.getAccount(this.DEFAULT_ACCOUNT_ID);
         const defaultRoles = defaultAccount?.roles ?? {};
         
         // Add missing roles from default account to the result
@@ -747,7 +746,7 @@ class ConfigManager {
         }
         
         // If role doesn't exist in account, try to get it from default account
-        const defaultAccount = await this.getAccount(DEFAULT_ACCOUNT_ID);
+        const defaultAccount = await this.getAccount(this.DEFAULT_ACCOUNT_ID);
         return defaultAccount?.roles?.[role];
     }
 
@@ -757,7 +756,7 @@ class ConfigManager {
 
     private async loadDefaultAccount(): Promise<Account | undefined> {
         try {
-            return await this.loadUpdateAccount(DEFAULT_ACCOUNT_ID);
+            return await this.loadUpdateAccount(this.DEFAULT_ACCOUNT_ID);
         } catch (error) {
             console.error('Error loading default account:', error);
             return undefined;

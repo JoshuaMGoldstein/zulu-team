@@ -1,18 +1,9 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { Model, Bot, Project, BotSettings, RoleSettings, InheritedBoolean, Verbosity } from './bots/types';
 import {log} from './utils/log'
-import { env } from 'process';
-import { stringify } from 'querystring';
 import { getApiUrl } from './utils/api';
 import * as dotenv from 'dotenv';
 import {publicdb, PSQLERROR} from './supabase';
-import {assert, logAssert} from './utils/assert';
 import templatemanager from './templatemanager';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
-import { randomUUID } from 'crypto';
 import {Database} from './db/public.types';
 import gcsUtil from './utils/gs';
 
@@ -33,7 +24,7 @@ class Account {
 }
 
 class ConfigManager {
-    public readonly DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';    
+    public readonly DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';
     private accounts:Map<string,Account> = new Map(); //map from accountID to Account
 
     private toolModels:Model[];

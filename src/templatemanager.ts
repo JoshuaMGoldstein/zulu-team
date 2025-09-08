@@ -1,6 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { log } from './utils/log';
 import { getApiUrl } from './utils/api';
 
 class TemplateManager {

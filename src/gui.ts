@@ -1,7 +1,166 @@
 import express from 'express';
 import cors from 'cors';
-import configManager from './configmanager';
+//import configManager from './configmanager';
+import {Bot, Project, BotSettings} from './bots/types'
 import { publicdb } from './supabase';
+
+class Account {
+    public instances: Bot[] = [];
+    public projects: Project[] = [];
+    public settings: BotSettings = {} as BotSettings;//Object.assign({}, DefaultBotSettings);
+    public roles: { [key: string]: BotSettings }= {};
+    public gitKeys: any[] = [];
+    public buckets: any[] = [];
+    public mounts: any[] = [];
+    public defaultBucketId: string | null = null;
+}
+var configManager = {
+    accounts: new Map<string,Account>(),
+    getAccount: async function(accountId:string):Promise<Account> {
+        let account = this.accounts.get(accountId);
+        if (!account) {
+            account = new Account();
+            
+            // Load bot instances from Supabase
+            const { data: instances, error: instancesError } = await publicdb
+                .from('bot_instances')
+                .select('*')
+                .eq('account_id', accountId);
+            if (instancesError) throw instancesError;
+            
+            // Map database instances to Bot interface
+            account.instances = (instances || []).map((instance: any) => ({
+                ...instance,
+                imageName: instance.image || '',
+                settings: {} as any,
+                workingDirectory: '',
+                lastActivity: '',
+                files: {},
+                env: {},
+                managedProjects: instance.managed_projects || []
+            }));
+
+            // Load projects from Supabase
+            const { data: projects, error: projectsError } = await publicdb
+                .from('projects')
+                .select('*')
+                .eq('account_id', accountId);
+            if (projectsError) throw projectsError;
+            
+            // Map database projects to Project interface
+            account.projects = (projects || []).map((project: any) => ({
+                ...project,
+                repositoryUrl: project.repository_url || '',
+                assignedQa: project.assigned_qa || '',
+                discordChannelIds: project.discord_channel_ids ? project.discord_channel_ids.split(',').map((id: string) => id.trim()) : [],
+                gitKeyId: project.git_key_id,
+                createdAt: project.created_at || '',
+                updatedAt: project.updated_at || ''
+            }));
+
+            // Load global settings from Supabase
+            const { data: settings, error: settingsError } = await publicdb
+                .from('settings')
+                .select('*')
+                .eq('account_id', accountId)
+                .single();
+            
+            if (settingsError && settingsError.code !== 'PGRST116') throw settingsError;
+            account.settings = {
+                dmVerbosity: settings?.dm_verbosity || -1,
+                channelVerbosity: settings?.channel_verbosity || -1,
+                delegatedVerbosity: settings?.delegated_verbosity || -1,
+            } as BotSettings;
+
+            // Load bot settings from Supabase
+            const { data: botsettings, error: botSettingsError } = await publicdb
+                .from('bot_settings')
+                .select('*')
+                .eq('account_id', accountId);
+            if (botSettingsError && botSettingsError.code != 'PGRST116') throw botSettingsError;
+
+            // Map bot settings
+            if (botsettings && botsettings.length > 0) {
+                const settingsMap = botsettings.reduce((acc: any, x: any) => {
+                    acc[x.instance_id] = {
+                        delegatedVerbosity: x.delegated_verbosity || -1,
+                        dmVerbosity: x.dm_verbosity || -1,
+                        channelVerbosity: x.channel_verbosity || -1,
+                        mountBotInstances: x.mount_bot_instances || -1,
+                        allowDelegation: x.allow_delegation || -1
+                    };
+                    return acc;
+                }, {});
+                
+                // Apply settings to instances
+                account.instances.forEach((instance: any) => {
+                    if (settingsMap[instance.id]) {
+                        instance.settings = settingsMap[instance.id];
+                    }
+                });
+            }
+
+            // Load roles from Supabase
+            const { data: roles, error: rolesError } = await publicdb
+                .from('roles')
+                .select('*')
+                .eq('account_id', accountId);
+            if (rolesError && rolesError.code != 'PGRST116') throw rolesError;
+            
+            if (roles && roles.length > 0) {
+                account.roles = roles.reduce((acc: any, role: any) => {
+                    acc[role.id] = {
+                        name: role.name || '',
+                        description: role.description || '',
+                        dmVerbosity: role.dm_verbosity || -1,
+                        channelVerbosity: role.channel_verbosity || -1,
+                        delegatedVerbosity: role.delegated_verbosity || -1,
+                        mountBotInstances: role.mount_bot_instances || -1,
+                        allowDelegation: role.allow_delegation || -1,
+                        md: role.md || ''
+                    };
+                    return acc;
+                }, {});
+            }
+
+            // Load git keys from Supabase
+            const { data: gitKeys, error: gitKeysError } = await publicdb
+                .from('git_keys')
+                .select('*')
+                .eq('account_id', accountId);
+            if (gitKeysError && gitKeysError.code != 'PGRST116') throw gitKeysError;
+            account.gitKeys = gitKeys || [];
+
+            // Load buckets from Supabase
+            const { data: buckets, error: bucketsError } = await publicdb
+                .from('buckets')
+                .select('*')
+                .eq('account_id', accountId);
+            if (bucketsError && bucketsError.code != 'PGRST116') throw bucketsError;
+            account.buckets = buckets || [];
+
+            // Load mounts from Supabase
+            const { data: mounts, error: mountsError } = await publicdb
+                .from('mounts')
+                .select('*')
+                .eq('account_id', accountId);
+            if (mountsError && mountsError.code != 'PGRST116') throw mountsError;
+            account.mounts = mounts || [];
+
+            // Set default bucket ID if available
+            if (account.buckets.length > 0) {
+                const defaultBucket = account.buckets.find((b: any) => b.is_default);
+                account.defaultBucketId = defaultBucket ? defaultBucket.id : account.buckets[0].id;
+            }
+
+            this.accounts.set(accountId, account);
+        }
+        return account;
+    }
+}
+
+const DEFAULT_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000';
+
 
 // Authentication middleware
 const authenticateUser = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -130,7 +289,7 @@ export const createGui = () => {
                 const { data: defaultData, error: defaultError } = await publicdb
                     .from('roles')
                     .select('md')
-                    .eq('account_id', configManager.DEFAULT_ACCOUNT_ID)
+                    .eq('account_id', DEFAULT_ACCOUNT_ID)
                     .eq('id', role)
                     .single();
                 
@@ -459,6 +618,7 @@ export const createGui = () => {
                     assigned_qa: newProjectData.assignedQa || '',
                     discord_channel_ids: newProjectData.discordChannelIds || []
                 },
+                git_key_id: newProjectData.gitKeyId || null,
                 settings: newProjectData.settings || {},
                 created_at: now,
                 updated_at: now
@@ -497,6 +657,7 @@ export const createGui = () => {
                 repository_url: updatedProjectData.repositoryUrl ?? existingProject.repositoryUrl,
                 assigned_qa: updatedProjectData.assignedQa ?? existingProject.assignedQa,
                 discord_channel_ids: updatedProjectData.discordChannelIds ?? existingProject.discordChannelIds,
+                git_key_id: updatedProjectData.gitKeyId ?? existingProject.gitKeyId,
                 updated_at: new Date().toISOString()
             })
             .eq('id', req.params.id)

@@ -1,10 +1,6 @@
 import { createServer } from './server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import { Bot, BotEventType, BotOutput, CommsEvent, Project, Verbosity, BotSettings } from './bots/types';
 import {GeminiToolCall, getGeminiToolCallOutputAndFormat} from './bots/gemini';
 import { Client, GatewayIntentBits, Events, Message, Role, ChannelType, TextChannel } from 'discord.js';

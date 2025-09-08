@@ -1,7 +1,6 @@
 import { Client, GatewayIntentBits, Events, Message, ChannelType, TextChannel } from 'discord.js';
 import { Bot, BotEvent, DelegationBotEvent, DiscordBotEvent } from './bots/types';
 import { log } from './utils/log';
-import { sendChunkedMessage } from './utils/discord';
 import { generateEventId } from './utils/snowflake';
 import configManager from './configmanager';
 import apiServer from './apiserver'; // Import to access handleBotFlow
@@ -9,7 +8,6 @@ import apiServer from './apiserver'; // Import to access handleBotFlow
 import {configdb, publicdb, PSQLERROR} from './supabase';
 import { Tables } from './db/config.types';
 
-import { assert, logAssert } from './utils/assert'
 
 
 class DiscordManager {

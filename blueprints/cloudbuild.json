@@ -3,13 +3,13 @@
     {
         "name":"gcr.io/cloud-builders/gcloud",
         "entrypoint": "bash",
-        "args": ["-c", "echo '$$ENV_FILE_CONTENT' > .env"],
+        "args": ["-c", "echo -e \"$$ENVFILE\" | base64 -d > .env"],
         "secretEnv": ["ENVFILE"]
     },
     {
         "name": "gcr.io/cloud-builders/docker",
         "script": "docker build -t us-east4-docker.pkg.dev/zulu-team/account${ACCOUNT_ID}/${PROJECT_NAME}:${BRANCH_NAME}-latest .",        
-        "env": ["DOCKER_BUILDKIT=1"]        
+        "env": ["DOCKER_BUILDKIT=1"]
     }
   ],
   "availableSecrets": {

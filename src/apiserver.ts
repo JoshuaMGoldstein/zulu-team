@@ -332,6 +332,15 @@ class ApiServer {
                 //Should we provide the push failure to developer? Currently it goes back to delegator.
             }
         } 
+
+        //FIXME, how do we allow the bots to commit the metadata repo?
+        /*if(responseJson.metadata_commit_hash && project) {
+            let pushSuccess:boolean = await dockerManager.runGitWorkflow('push-branch', fromInstance, project, 'radsuite-metadata', responseJson.metadata_commit_hash);
+            if(!pushSuccess) {
+                responseJson.task_status= 'problem';
+                responseJson.system_message=`Could not push metadata_commit_hash: ${responseJson.metadata_commit_hash} for radsuite-metadata branch on project: ${originalEvent.project}`;
+            }
+        }*/                
         
         if(nextEvent.attempts > MAX_ATTEMPTS+1) {
             console.error(`Error in processDelegationBotResponse, delegator=${delegator?delegator.id:'?'}, attempts=${nextEvent?nextEvent.attempts:'?'}`);

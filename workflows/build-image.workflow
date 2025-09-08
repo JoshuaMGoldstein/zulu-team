@@ -1,4 +1,4 @@
-FROM clone-project
+FROM clone-project-set-branch
 
 ARG ACCOUNT_ID
 ARG PROJECT_NAME
@@ -30,9 +30,6 @@ RUN sed -i "s/\${ACCOUNT_ID}/${ACCOUNT_ID}/g" /workspace/cloudbuild-nosecrets.js
     sed -i "s/\${BRANCH_NAME}/${BRANCH_NAME}/g" /workspace/cloudbuild-nosecrets.json && \
     sed -i "s/\${ENVIRONMENT}/${ENVIRONMENT}/g" /workspace/cloudbuild-nosecrets.json
 
-RUN cat /workspace/cloudbuild-nosecrets.json
-
-RUN ls -la ${PROJECT_NAME}
 
 # Submit the build to Google Cloud Build, checking for secrets availability
 RUN if gcloud secrets describe "account${ACCOUNT_ID}-${PROJECT_NAME}-ENVFILE-${ENVIRONMENT}" --project=zulu-team; then \

@@ -19,7 +19,14 @@ RUN if [ -z "$PROJECT_NAME" ]; then \
 RUN if [ -n "${BRANCH_NAME}" ]; then \
     cd /workspace/${PROJECT_NAME} && \
     git fetch && \
-    if git show-ref --verify --quiet refs/remotes/origin/${BRANCH_NAME}; then \
+    git reset --hard HEAD || true && \
+    git clean -fd && \
+    if git rev-parse --verify --quiet ${BRANCH_NAME}; then \
+      git branch ${BRANCH_NAME} && \
+      git push -u origin ${BRANCH_NAME} || true && \
+      git pull && \
+      git reset --hard origin/${BRANCH_NAME}; \
+    elif git show-ref --verify --quiet refs/remotes/origin/${BRANCH_NAME}; then \
       git checkout -b ${BRANCH_NAME} origin/${BRANCH_NAME} && \
       git pull && \
       git reset --hard origin/${BRANCH_NAME}; \

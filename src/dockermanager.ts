@@ -136,7 +136,7 @@ class DockerManager {
             this.createEventListeners(child, instanceId, eventId, resolve, reject, statusMessage);            
         });
     }
-
+/*
     public async cloneProject(instance: Bot, project: Project) {
         const containerName = this.getContainerName(instance);
         const projectPath = `/workspace/${project.name}`;
@@ -147,7 +147,7 @@ class DockerManager {
                 log(`Project ${project.name} already exists for instance ${instance.id}.`);
                 
                 // Check if bot has mount-bot-instances privileges
-                const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+                const hasMountPrivilege = (await configManager.getBotInstanceAppliedSettings(instance))?.mountBotInstances === InheritedBoolean.TRUE;
                 
                 // For bots with mount privilege, try reset-to-origin workflow for faster startup
                 if (hasMountPrivilege) {
@@ -178,13 +178,13 @@ class DockerManager {
         } catch (error) {
             log(`Error cloning project ${project.name} into ${containerName}:`, error);
         }
-    }
+    }*/
 
     private async doGitLogic(instance:Bot, event:BotEvent, project: Project, branch?: string): Promise<void> {
         const containerName = this.getContainerName(instance);
         
         // Check if bot has mount-bot-instances privileges for metadata access
-        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+        const hasMountPrivilege = (await configManager.getBotInstanceAppliedSettings(instance))?.mountBotInstances === InheritedBoolean.TRUE;
         
         // Setup main project
         await this.setupProjectBranch(instance, project, branch);
@@ -194,9 +194,10 @@ class DockerManager {
             const metadataProject: Project = {
                 ...project,
                 name: `${project.name}-metadata`,
-                repositoryUrl: project.repositoryUrl.replace('.git', '-metadata.git')
+                // Use same repository but different branch for metadata
+                repositoryUrl: project.repositoryUrl
             };
-            await this.setupProjectBranch(instance, metadataProject, branch);
+            await this.setupProjectBranch(instance, metadataProject, 'radsuite-metadata');
         }
     }
 
@@ -278,21 +279,10 @@ class DockerManager {
         env.EVENT_ID = event.id; 
 
         // Check if bot has mount-bot-instances privileges
-        const hasMountPrivilege = instance.settings?.mountBotInstances === InheritedBoolean.TRUE;
+        const hasMountPrivilege = (await configManager.getBotInstanceAppliedSettings(instance))?.mountBotInstances === InheritedBoolean.TRUE;
         
-        // Determine working directory based on privileges
+        // All bots operate from /workspace for now to simplify file access
         let workingDir = '/workspace';
-        if (!hasMountPrivilege) {
-            // Developers without mount privilege work in project-specific directory
-            if (event instanceof DelegationBotEvent) {
-                workingDir = `/workspace/${event.project}`;
-            } else if (event instanceof DiscordBotEvent) {
-                const commsEvent = event as DiscordBotEvent;
-                if (commsEvent.channelProjects.length > 0) {
-                    workingDir = `/workspace/${commsEvent.channelProjects[0]}`;
-                }
-            }
-        }
 
         // Set working directory in environment
         env.WORKING_DIR = workingDir;

@@ -4,7 +4,7 @@ import * as path from 'path';
 import { log } from './utils/log';
 import { IDocker, ExecOptions, ExecResult } from './utils/idocker';
 import { publicdb } from './supabase';
-import {Bot} from './bots/types'
+import {Bot, Project} from './bots/types'
 import configManager from './configmanager'
 import { config } from 'dotenv';
 
@@ -119,7 +119,7 @@ export class WorkflowManager {
   /**
    * Build a context for Git-based workflows with all necessary arguments and files
    */
-  public async buildGitContext(docker: IDocker, containerName: string, project: any, branch?: string, commit_hash?:string): Promise<WorkflowContext> {
+  public async buildGitContext(docker: IDocker, containerName: string, project: Project, branch?: string, commit_hash?:string): Promise<WorkflowContext> {
     // Fetch git key data from database using project.account_id
     const { data: gitKeys, error: gitKeysError } = await publicdb
       .from('git_keys')
@@ -130,7 +130,7 @@ export class WorkflowManager {
       throw new Error(`No git keys found for account ${project.account_id}`);
     }
     
-    const sshKey = gitKeys.find((key: any) => key.id === project.git_key_id) || gitKeys[0];
+    const sshKey = gitKeys.find((key: any) => key.id === project.gitKeyId) || gitKeys[0];
     
     // Decode the base64 encoded private key
     if (!sshKey.private_key) {

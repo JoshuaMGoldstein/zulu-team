@@ -235,6 +235,11 @@ class ConfigManager {
 
         }
 
+        let artifactRepositoryId = null;
+        if(serviceAccountData) {
+            artifactRepositoryId = await this.initializeArtifactRepository(accountId, serviceAccountData?.client_email);
+        }
+
         // Check if bucket already exists
         const { data: existingBucket } = await publicdb
             .from('buckets')
@@ -286,7 +291,61 @@ class ConfigManager {
             }
         }
 
-        return { serviceAccount: serviceAccountData, bucket: bucketData };
+        return { serviceAccount: serviceAccountData, bucket: bucketData, artifactRepositoryId:artifactRepositoryId };
+    }
+
+    /**
+     * Initialize or get artifact repository for an account
+     * This should be called separately from GCS resource initialization
+     * to handle cases where repository creation might fail independently
+     */
+    public async initializeArtifactRepository(accountId: string, serviceAccountEmail:string): Promise<string | null> {
+        try {
+            // Check if repository already exists in database
+            const { data: account } = await publicdb
+                .from('accounts')
+                .select('cloudbuild_repository')
+                .eq('id', accountId)
+                .single();
+
+            if (account?.cloudbuild_repository) {
+                console.log(`✅ Artifact repository already configured for account ${accountId}: ${account.cloudbuild_repository}`);
+                return account.cloudbuild_repository;
+            }
+
+            // Repository not configured, create it
+            const repoName = `account${accountId}`;
+            const location = 'us-east4';
+            
+            // Check if repository exists in GCP
+            const exists = await gcsUtil.repositoryExists(repoName, location);
+            
+            if (!exists) {
+                console.log(`Creating artifact repository for account ${accountId}...`);
+                await gcsUtil.createArtifactRepository(accountId, location, repoName);         
+            }
+       
+            // Grant the account's service account access to the repository (if it were listed in database it would already be done)
+            await gcsUtil.grantRepositoryAccess(accountId, repoName, location, serviceAccountEmail);
+
+            // Update database with repository name
+            const { error: updateError } = await publicdb
+                .from('accounts')
+                .update({ cloudbuild_repository: repoName })
+                .eq('id', accountId);
+
+            if (updateError) {
+                throw updateError;
+            }
+
+            console.log(`✅ Artifact repository initialized for account ${accountId}: ${repoName}`);
+            return repoName;
+
+        } catch (error) {
+            console.error(`Error initializing artifact repository for account ${accountId}:`, error);
+            // Return null to allow continuation without repository
+            return null;
+        }
     }
 
     private async loadAccountBucketsAndMounts(accountId: string, account: Account) {
@@ -418,10 +477,12 @@ class ConfigManager {
 
     public async loadUpdateAccount(accountId:string):Promise<Account> {
         //First load the default account if it isnt already loaded.
-        let defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
-        if(!defaultAccount) { 
-            defaultAccount = await this.loadDefaultAccount(); 
-            console.log(`Loaded default account:`, defaultAccount);
+        if(accountId != DEFAULT_ACCOUNT_ID) {
+            let defaultAccount = this.accounts.get(DEFAULT_ACCOUNT_ID);
+            if(!defaultAccount) { 
+                defaultAccount = await this.loadDefaultAccount(); 
+                console.log(`Loaded default account:`, defaultAccount);
+            }
         }
 
         let account = this.accounts.get(accountId);
@@ -510,7 +571,8 @@ class ConfigManager {
                 discordChannelIds: project.discord_channel_ids.split(',').map(c=>c.trim()) || [],
                 //settings: project.settings || {},
                 createdAt: project.created_at || new Date().toISOString(),
-                updatedAt: project.updated_at || new Date().toISOString()
+                updatedAt: project.updated_at || new Date().toISOString(),
+                gitKeyId: project.git_key_id || undefined
             })) as Project[];
 
             // Sync bot-instances folder with projects.json and instances.json after populating them

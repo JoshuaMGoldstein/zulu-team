@@ -16,6 +16,86 @@ export class GCSUtil {
     }
   }
 
+  /**
+   * Check if Artifact Registry repository exists
+   * @param repositoryName The repository name
+   * @param location The region (default: us-east4)
+   * @returns true if repository exists, false otherwise
+   */
+  async repositoryExists(repositoryName: string, location: string = 'us-east4'): Promise<boolean> {
+    try {
+      const describeCommand = `gcloud artifacts repositories describe ${repositoryName} --location=${location} --project=${this.projectId}`;
+      await execAsync(describeCommand);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Create Artifact Registry repository
+   * @param repositoryName The repository name
+   * @param location The region (default: us-east4)
+   * @param description Optional description for the repository
+   * @returns The repository name
+   */
+  async createArtifactRepositoryInternal(repositoryName: string, location: string = 'us-east4', description?: string): Promise<string> {
+    const repoDescription = repositoryName;
+    
+    try {
+      const createCommand = `gcloud artifacts repositories create ${repositoryName} --repository-format=docker --location=${location} --project=${this.projectId} --description="${repoDescription}"`;
+      await execAsync(createCommand);
+      console.log(`✅ Created artifact repository ${repositoryName}`);
+      return repositoryName;
+    } catch (createError) {
+      console.error(`Error creating artifact repository ${repositoryName}:`, createError);
+      throw createError;
+    }
+  }
+
+  /**
+   * Create or get Artifact Registry repository for an account
+   * @param accountId The account ID
+   * @param location The region (default: us-east4)
+   * @param repositoryName The repository name (default: account{accountId})
+   * @returns The repository name
+   */
+  async createArtifactRepository(accountId: string, location: string = 'us-east4', repositoryName?: string): Promise<string> {
+    const repoName = repositoryName || `account${accountId}`;
+    
+    // Check if repository already exists
+    const exists = await this.repositoryExists(repoName, location);
+    if (exists) {
+      console.log(`✅ Artifact repository ${repoName} already exists`);
+      return repoName;
+    }
+    
+    // Repository doesn't exist, create it
+    console.log(`Creating artifact repository ${repoName}...`);
+    await this.createArtifactRepositoryInternal(repoName, location, `Docker repository for account ${accountId}`);
+    
+    return repoName;
+  }
+
+  /**
+   * Grant IAM access to artifact repository for account service account
+   * @param accountId The account ID
+   * @param repositoryName The repository name
+   * @param location The region
+   */
+  async grantRepositoryAccess(accountId: string, repositoryName: string, location: string, serviceAccountEmail:string): Promise<void> {  
+    const role = 'roles/artifactregistry.writer';
+    
+    try {
+      const command = `gcloud artifacts repositories add-iam-policy-binding ${repositoryName} --location=${location} --member=serviceAccount:${serviceAccountEmail} --role=${role} --project=${this.projectId}`;
+      await execAsync(command);
+      console.log(`✅ Granted ${role} access to ${serviceAccountEmail} for repository ${repositoryName}`);
+    } catch (error) {
+      console.error(`Error granting repository access:`, error);
+      throw error;
+    }
+  }
+
   private getFromCache(key: string): string | undefined {
     const cached = this.logCache.get(key);
     if (cached) {

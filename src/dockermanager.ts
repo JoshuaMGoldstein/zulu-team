@@ -311,7 +311,8 @@ class DockerManager {
         let flashFlag = '';
 
         if (instance.model === 'auto') {
-            modelFlag = 'kimi-k2-turbo-preview'; // default Moonshot model
+            modelFlag = 'kimi-k2-0905-preview'; // default Moonshot model
+            //modelFlag = 'kimi-k2-turbo-preview'; // default Moonshot model
         } else {
             modelFlag = instance.model;
         }

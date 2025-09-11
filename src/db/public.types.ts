@@ -291,6 +291,7 @@ export type Database = {
           account_id: string
           channel_id: string
           created_at: string | null
+          guild_id: string | null
           id: string
           is_active: boolean | null
           type: string
@@ -299,6 +300,7 @@ export type Database = {
           account_id: string
           channel_id: string
           created_at?: string | null
+          guild_id?: string | null
           id?: string
           is_active?: boolean | null
           type: string
@@ -307,6 +309,7 @@ export type Database = {
           account_id?: string
           channel_id?: string
           created_at?: string | null
+          guild_id?: string | null
           id?: string
           is_active?: boolean | null
           type?: string
@@ -910,6 +913,44 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      user_authorizations: {
+        Row: {
+          account_id: string
+          authorized_identifier: string
+          created_at: string
+          id: number
+          is_active: boolean
+          type: string
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          authorized_identifier: string
+          created_at?: string
+          id?: number
+          is_active?: boolean
+          type: string
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          authorized_identifier?: string
+          created_at?: string
+          id?: number
+          is_active?: boolean
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_authorizations_account_id_user_id_fkey"
+            columns: ["account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "account_users"
+            referencedColumns: ["account_id", "user_id"]
+          },
+        ]
       }
       user_profiles: {
         Row: {

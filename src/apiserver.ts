@@ -14,11 +14,9 @@ import { generateEventId } from './utils/snowflake';
 import { parseCodeBlocks } from './utils/parsers';
 import configManager from './configmanager';
 import gcsUtil from './utils/gs';
-
 import {BotEvent,DiscordBotEvent,DelegationBotEvent} from './bots/types';
 import dockermanager from './dockermanager';
 import workflowManager from './workflowmanager';
-import { Files } from '@google/genai';
 
 const MAX_ATTEMPTS = 5;
 

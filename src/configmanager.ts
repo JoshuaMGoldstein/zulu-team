@@ -38,7 +38,8 @@ class ConfigManager {
     }
 
     public getProviderForModel(model:string) {
-        let modelFlag = (model === 'auto')?'kimi-k2-turbo-preview':model;
+        let modelFlag = (model === 'auto')?'kimi-k2-0905-preview':model;
+        //let modelFlag = (model === 'auto')?'kimi-k2-turbo-preview':model;
         let provider='moonshot'; //default
         const found = this.toolModels.find((m: any) => m.id === model);
         if (found) provider = found.provider;

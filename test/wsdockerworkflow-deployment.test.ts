@@ -85,7 +85,7 @@ describe('WorkflowManager with WSDocker - Deployment Workflows', () => {
       //const projects = JSON.parse(fs.readFileSync(path.join(__dirname, '../bot-instances/projects.json'), 'utf-8'));
       //const testProject = projects.find((p: any) => p.name === 'zulu-www');
       const account_id = 'b9955f70-eeb0-4ba6-85a6-4f7e0e1f85b2';
-      let project = 'zulu-www';
+      let project = 'traefik-proxy';
       const projectObject = (await configManager.getProjects(account_id)).find(p => p.name === project);
       if(projectObject == null) throw new Error(`Project ${project} not found`);
       const cloudbuildJson = fs.readFileSync(path.join(__dirname, '../blueprints/cloudbuild.json'), 'utf-8');
@@ -114,7 +114,7 @@ describe('WorkflowManager with WSDocker - Deployment Workflows', () => {
         args: {
           REPO_URL: sshRepoUrl,
           PROJECT_NAME: project,
-          BRANCH_NAME: 'staging-deploy',
+          BRANCH_NAME: 'master',
           ENVIRONMENT: 'staging',
           ACCOUNT_ID: account_id,
           SSH_KEY_PATH: sshKey.id,
@@ -195,9 +195,9 @@ describe('WorkflowManager with WSDocker - Deployment Workflows', () => {
     it('should deploy a Cloud Run service', async () => {
       // Use the same parameters as the build-image test to ensure the image exists
       const accountId = 'b9955f70-eeb0-4ba6-85a6-4f7e0e1f85b2';
-      const projectName = 'zulu-www';
+      const projectName = 'traefik-proxy';
       const environment = 'staging';
-      const branchName = 'staging-deploy';
+      const branchName = 'master';
       
       // The image name should match what was built in the build-image test
       const imageName = `${projectName}:${branchName}-latest`;

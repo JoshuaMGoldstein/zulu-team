@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { WSDocker } from '../utils/wsdocker';
-import { WorkflowContext, WorkflowManager } from '../workflowmanager';
+import { WSDocker } from '../src/utils/wsdocker';
+import { WorkflowContext, WorkflowManager } from '../src/workflowmanager';
 import * as fs from 'fs';
 import * as path from 'path';
 

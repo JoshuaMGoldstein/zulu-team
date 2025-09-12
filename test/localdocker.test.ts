@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { LocalDocker } from './localdocker';
+import { LocalDocker } from '../src/utils/localdocker';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 

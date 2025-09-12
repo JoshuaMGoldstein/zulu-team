@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { WSDocker } from './wsdocker';
+import { WSDocker } from '../src/utils/wsdocker';
 import * as fs from 'fs';
 import * as path from 'path';
 

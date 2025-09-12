@@ -416,6 +416,59 @@ export type Database = {
           },
         ]
       }
+      environments: {
+        Row: {
+          account_id: string
+          build_status: string | null
+          created_at: string
+          deployment_status: string | null
+          id: string
+          image_name: string | null
+          last_build_at: string | null
+          last_deployment_at: string | null
+          name: string
+          project_id: string
+          service_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          build_status?: string | null
+          created_at?: string
+          deployment_status?: string | null
+          id?: string
+          image_name?: string | null
+          last_build_at?: string | null
+          last_deployment_at?: string | null
+          name: string
+          project_id: string
+          service_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          build_status?: string | null
+          created_at?: string
+          deployment_status?: string | null
+          id?: string
+          image_name?: string | null
+          last_build_at?: string | null
+          last_deployment_at?: string | null
+          name?: string
+          project_id?: string
+          service_name?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "environments_project_id_account_id_fkey"
+            columns: ["project_id", "account_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id", "account_id"]
+          },
+        ]
+      }
       git_keys: {
         Row: {
           account_id: string
@@ -757,6 +810,41 @@ export type Database = {
           },
         ]
       }
+      secrets: {
+        Row: {
+          account_id: string
+          created_at: string
+          environment_id: string
+          id: string
+          project_id: string
+          secrets_value: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          environment_id: string
+          id?: string
+          project_id: string
+          secrets_value?: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          environment_id?: string
+          id?: string
+          project_id?: string
+          secrets_value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "secrets_environment_id_fkey"
+            columns: ["environment_id"]
+            isOneToOne: false
+            referencedRelation: "environments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       service_accounts: {
         Row: {
           account_id: string
@@ -919,7 +1007,7 @@ export type Database = {
           account_id: string
           authorized_identifier: string
           created_at: string
-          id: number
+          id: string
           is_active: boolean
           type: string
           user_id: string
@@ -928,7 +1016,7 @@ export type Database = {
           account_id: string
           authorized_identifier: string
           created_at?: string
-          id?: number
+          id?: string
           is_active?: boolean
           type: string
           user_id: string
@@ -937,7 +1025,7 @@ export type Database = {
           account_id?: string
           authorized_identifier?: string
           created_at?: string
-          id?: number
+          id?: string
           is_active?: boolean
           type?: string
           user_id?: string
@@ -1012,6 +1100,30 @@ export type Database = {
           provider?: string
           provider_id?: string
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      waitlist: {
+        Row: {
+          created: string
+          email: string
+          id: string
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          created?: string
+          email: string
+          id?: string
+          status?: string
+          user_id?: string | null
+        }
+        Update: {
+          created?: string
+          email?: string
+          id?: string
+          status?: string
+          user_id?: string | null
         }
         Relationships: []
       }

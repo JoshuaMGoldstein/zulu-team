@@ -17,6 +17,9 @@ import gcsUtil from './utils/gs';
 import {BotEvent,DiscordBotEvent,DelegationBotEvent} from './bots/types';
 import dockermanager from './dockermanager';
 import workflowManager from './workflowmanager';
+import { initializeBuildServerPool, getBuildServerForAccount, releaseBuildServer, getBuildServerPoolStats } from './utils/buildserver-pool-integration';
+import { publicdb } from './supabase';
+import { Database } from './db/public.types';
 
 const MAX_ATTEMPTS = 5;
 
@@ -33,6 +36,9 @@ class ApiServer {
         this.app.use(express.json());
         this.app.use(this.authenticateToken.bind(this));
         this.setupRoutes();
+
+        // Initialize build server pool
+        initializeBuildServerPool(dockerManager.getDocker());
 
         // Start log flushing interval
         flushInterval = setInterval(() => this.flushLogs(), LOG_FLUSH_INTERVAL);
@@ -483,7 +489,7 @@ class ApiServer {
                     details: error instanceof Error ? error.message : String(error)
                 });
             } finally {
-                dockermanager.getDocker().rm(containerName);                
+                releaseBuildServer(containerName);
             }
         });
 
@@ -523,17 +529,53 @@ class ApiServer {
                     } 
                 }
       
-                const buildResult = await workflowManager.executeWorkflow('build-image', context);                            
+                const buildResult = await workflowManager.executeWorkflow('build-image', context);
+
+                // Extract image name from build result
+                const buildOutput = buildResult.stdout.join(' ');
+                const imageName = buildOutput.match(/us-east4-docker\.pkg\.dev[^\s]+/)?.[0];
+                
+                const finalImageName = imageName || `us-east4-docker.pkg.dev/zulu-team/account${account_id}/${project}:${branch}-latest`;
+
+                // Update environment record with build information
+                const buildStatus = buildResult.exitCode === 0 ? 'success' : 'failed';
+                const buildLogsUrl = buildResult.exitCode !== 0 ? `https://console.cloud.google.com/cloud-build/builds?project=zulu-team` : undefined;
+                
+                await this.updateEnvironmentRecord(account_id, projectObject.id, environment, { 
+                    image_name: finalImageName,
+                    build_status: buildStatus,
+                    build_logs_url: buildLogsUrl,
+                    last_build_at: new Date().toISOString()
+                });
 
                 context.workdir=`/workspace`;
                 context.files={};
                 const deployResult = await workflowManager.executeWorkflow('deploy-service', context)
 
+                // Extract service name from deploy result
+                const deployOutput = deployResult.stdout.join(' ');
+                const serviceName = deployOutput.match(/account\d+-\w+-\w+/)?.[0];
+                
+                const finalServiceName = serviceName || `account${account_id}-${project}-${environment}`;
+
+                // Update environment record with deployment information
+                const deploymentStatus = deployResult.exitCode === 0 ? 'success' : 'failed';
+                const deploymentLogsUrl = deployResult.exitCode !== 0 ? `https://console.cloud.google.com/run/detail/us-east4/${finalServiceName}/logs?project=zulu-team` : undefined;
+                
+                await this.updateEnvironmentRecord(account_id, projectObject.id, environment, { 
+                    service_name: finalServiceName,
+                    deployment_status: deploymentStatus,
+                    deployment_logs_url: deploymentLogsUrl,
+                    last_deployment_at: new Date().toISOString()
+                });
+
                 res.json({ 
                     success: true, 
                     message: `Deployment initiated for ${project} (${environment})`,
                     buildResult: buildResult,
-                    deployResult: deployResult 
+                    deployResult: deployResult,
+                    imageName: finalImageName,
+                    serviceName: finalServiceName
                 });                
             } catch (error) {
                 log(`Error deploying environment:`, error);
@@ -542,7 +584,7 @@ class ApiServer {
                     details: error instanceof Error ? error.message : String(error)
                 });
             } finally {
-                dockermanager.getDocker().rm(containerName);                
+                releaseBuildServer(containerName);
             }
         });
 
@@ -560,10 +602,14 @@ class ApiServer {
 
 
 
-            //FIXME: Later we can create a 'pool' of build servers for efficiency.
-            let containerName = 'buildserver'+account_id;
+            // Use build server pool for efficiency
+            let containerName = '';
             try {
-                await dockermanager.getDocker().run(containerName,'buildserver-docker', {});
+                containerName = await getBuildServerForAccount(account_id);
+                log(`BuildServerPool: Using server ${containerName} for account ${account_id}`);
+                
+                // The pool already ensures the container is running and healthy
+                log(`BuildServerPool: Server ${containerName} is ready for use`);
 
                 // Execute get-environment-url workflow
                 const context = {
@@ -582,6 +628,9 @@ class ApiServer {
 
                 const result = await workflowManager.executeWorkflow('get-environment-url', context);
                 
+                // Release the build server back to the pool
+                releaseBuildServer(containerName);
+                
                 res.json({ 
                     success: true, 
                     url: result,
@@ -590,13 +639,13 @@ class ApiServer {
 
                 
             } catch (error) {
-                log(`Error getting environment URL:`, error);
+                log(`Error in get-environment-url: ${error}`);
+                // Make sure to release the build server even on error
+                releaseBuildServer(containerName);
                 res.status(500).json({ 
-                    error: 'Failed to get environment URL', 
-                    details: error instanceof Error ? error.message : String(error)
+                    success: false, 
+                    error: error instanceof Error ? error.message : 'Unknown error'
                 });
-            } finally {
-                dockermanager.getDocker().rm(containerName);
             }
         });
 
@@ -643,7 +692,7 @@ class ApiServer {
                     details: error instanceof Error ? error.message : String(error)
                 });
             } finally {
-                dockermanager.getDocker().rm(containerName);
+                releaseBuildServer(containerName);
             }
         });
 
@@ -709,6 +758,182 @@ class ApiServer {
                 res.status(404).send('Target bot not found or is disabled');
             }
         });
+
+        // Post-commit endpoint for git hooks
+        this.app.post('/postcommit', async (req, res) => {
+            const account_id = ApiServer.GetAccountId(req);
+            const instanceId = req.header('X-Instance-Id');
+            const eventId = req.header('X-Event-Id');
+            
+
+            if (!instanceId) {
+                return res.status(400).json({ error: 'X-Instance-Id header is required' });
+            }
+
+            if (!eventId) {
+                return res.status(400).json({ error: 'X-Event-Id header is required' });
+            }
+
+
+            const { project, branch, commit_hash, directory } = req.body;
+
+            if (!project || typeof project !== 'string') {
+                return res.status(400).json({ error: 'project is required and must be a string' });
+            }
+
+            if (!branch || typeof branch !== 'string') {
+                return res.status(400).json({ error: 'branch is required and must be a string' });
+            }
+
+            if (!commit_hash || typeof commit_hash !== 'string') {
+                return res.status(400).json({ error: 'commit_hash is required and must be a string' });
+            }
+
+            if (!directory || typeof directory !== 'string') {
+                return res.status(400).json({ error: 'directory is required and must be a string' });
+            }
+
+            try {
+                // Validate the instance exists and belongs to the account
+                const instance = (await configManager.getInstances(account_id)).find((inst: any) => inst.id === instanceId);
+                if (!instance) {
+                    return res.status(404).json({ error: 'Instance not found' });
+                }
+
+
+                // Validate the project exists and belongs to the account
+                const projects = await configManager.getProjects(account_id);
+                const projectObj = projects.find((p: any) => p.name === project);
+                if (!projectObj) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+
+                // Validate the directory is one of the expected paths
+                const expectedDirectories = [
+                    `/workspace/${project}`,
+                    `/workspace/${project}-metadata`
+                ];
+
+                if (!expectedDirectories.includes(directory)) {
+                    return res.status(400).json({ 
+                        error: `Invalid directory. Expected one of: ${expectedDirectories.join(', ')}`,
+                        received: directory
+                    });
+                }
+
+                // Use the same git push logic as delegation requests
+                log(`Post-commit hook: Pushing commit ${commit_hash} for project ${project} on branch ${branch} from directory ${directory}`);
+                
+                let pushSuccess = false;
+                try {
+                    pushSuccess = await dockerManager.runGitWorkflow('push-branch', instance, projectObj, branch, commit_hash);
+                } catch (error) {
+                    log(`Error in post-commit git workflow:`, error);
+                    pushSuccess = false;
+                }
+
+                if (pushSuccess) {
+                    res.status(200).json({ 
+                        success: true, 
+                        message: `Successfully pushed commit ${commit_hash} to ${branch}`,
+                        project,
+                        branch,
+                        commit_hash,
+                        directory
+                    });
+                } else {
+                    res.status(500).json({ 
+                        success: false, 
+                        error: `Failed to push commit ${commit_hash} to ${branch}`,
+                        project,
+                        branch,
+                        commit_hash,
+                        directory
+                    });
+                }
+
+            } catch (error) {
+                log(`Error in postcommit endpoint:`, error);
+                res.status(500).json({ 
+                    error: 'Internal server error',
+                    details: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+    }
+
+    /**
+     * Updates or creates an environment record in the database
+     */
+    private async updateEnvironmentRecord(
+        accountId: string,
+        projectId: string,
+        environmentName: string,
+        updates: { 
+            image_name?: string; 
+            service_name?: string;
+            build_status?: string;
+            build_logs_url?: string;
+            deployment_status?: string;
+            deployment_logs_url?: string;
+            last_build_at?: string;
+            last_deployment_at?: string;
+        }
+    ): Promise<void> {
+        try {
+            // Check if environment record exists
+            const { data: existingEnv, error: fetchError } = await publicdb
+                .from('environments')
+                .select('id')
+                .eq('account_id', accountId)
+                .eq('project_id', projectId)
+                .eq('name', environmentName)
+                .single();
+
+            if (fetchError && fetchError.code !== 'PGRST116') {
+                log(`Error fetching environment record:`, fetchError);
+                return;
+            }
+
+            const now = new Date().toISOString();
+
+            if (existingEnv) {
+                // Update existing record
+                const { error: updateError } = await publicdb
+                    .from('environments')
+                    .update({
+                        ...updates,
+                        updated_at: now
+                    })
+                    .eq('id', existingEnv.id);
+
+                if (updateError) {
+                    log(`Error updating environment record:`, updateError);
+                } else {
+                    log(`Updated environment record for ${environmentName}:`, updates);
+                }
+            } else {
+                // Create new record
+                const { error: insertError } = await publicdb
+                    .from('environments')
+                    .insert({
+                        account_id: accountId,
+                        project_id: projectId,
+                        name: environmentName,
+                        ...updates,
+                        created_at: now,
+                        updated_at: now
+                    });
+
+                if (insertError) {
+                    log(`Error creating environment record:`, insertError);
+                } else {
+                    log(`Created environment record for ${environmentName}:`, updates);
+                }
+            }
+        } catch (error) {
+            log(`Error in updateEnvironmentRecord:`, error);
+        }
     }
 
     public listen(port: number, callback?: () => void) {

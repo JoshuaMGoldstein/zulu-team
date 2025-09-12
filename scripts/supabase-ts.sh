@@ -1,2 +1,2 @@
  npx supabase gen types typescript --project-id "ejpfbwcmdvwglqfqvlwt" --schema public > src/db/public.types.ts
- npx supabase gen types typescript --project-id "ejpfbwcmdvwglqfqvlwt" --schema config > src/db/config.types.ts
+ #npx supabase gen types typescript --project-id "ejpfbwcmdvwglqfqvlwt" --schema config > src/db/config.types.ts

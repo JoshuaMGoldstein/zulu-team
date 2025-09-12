@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { updateModelsInSupabase } from './models';
-import configManager from './configmanager';
+import { updateModelsInSupabase } from '../src/models';
+import configManager from '../src/configmanager';
 
 // Commented out mocks to test with real database
 // vi.mock('./supabase');

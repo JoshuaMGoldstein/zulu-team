@@ -114,6 +114,9 @@ export interface RoleSettings extends BotSettings {
 
 enum BotEventSource {
     DISCORD = "discord",
+    SLACK = "slack",
+    TEAMS = "teams",
+    RAD = "rad",
     DELEGATION = "delegation"
 }
 
@@ -171,6 +174,74 @@ export class DiscordBotEvent extends CommsEvent {
     public channelProjects: string[];
 }
 
+export class SlackBotEvent extends CommsEvent {
+    constructor(e:{id:string, account_id:string, event:any, channelProjects: string[]}) {
+        super(e.id, e.account_id, BotEventSource.SLACK);                
+        this.event=e.event;
+        this.channelProjects = e.channelProjects;
+    }
+    public getSummary():string {
+        return JSON.stringify({
+            account_id: this.account_id,
+            id: this.id,
+            timestamp:this.getDateISOString(),
+            source:this.source,
+            author: { id: this.event.user, name: this.event.user },            
+            content:this.event.text,
+            channelProjects: this.channelProjects
+        });
+    }
+    
+    public event: any;
+    public channelProjects: string[];
+}
+
+export class TeamsBotEvent extends CommsEvent {
+    constructor(e:{id:string, account_id:string, context: any, channelProjects: string[]}) {
+        super(e.id, e.account_id, BotEventSource.TEAMS);                
+        this.context=e.context;
+        this.channelProjects = e.channelProjects;
+    }
+    public getSummary():string {
+        return JSON.stringify({
+            account_id: this.account_id,
+            id: this.id,
+            timestamp:this.getDateISOString(),
+            source:this.source,
+            author: { id: this.context.activity.from?.id, name: this.context.activity.from?.name },            
+            content:this.context.activity.text,
+            channelProjects: this.channelProjects
+        });
+    }
+    
+    public context: any;
+    public channelProjects: string[];
+}
+
+export class RadBotEvent extends CommsEvent {
+    constructor(e:{id:string, account_id:string, message: any, channelProjects: string[]}) {
+        super(e.id, e.account_id, BotEventSource.RAD);                
+        this.message=e.message;
+        this.channelProjects = e.channelProjects;
+    }
+    public getSummary():string {
+        return JSON.stringify({
+            account_id: this.account_id,
+            id: this.id,
+            timestamp:this.getDateISOString(),
+            source:this.source,
+            author: { id: this.message.userId, name: this.message.username },            
+            content:this.message.message,
+            channelProjects: this.channelProjects,
+            environment: this.message.environment,
+            stagingUrl: this.message.stagingUrl
+        });
+    }
+    
+    public message: any;
+    public channelProjects: string[];
+}
+
 export class DelegationBotEvent extends BotEvent {
     constructor(e:{id:string, account_id:string, project:string, task_description:string, notes:string, data:any, delegator_botid:string,assignedTo:string, commsEvent: BotEvent, attempts?: number, branch?: string, changedFiles?: string[]}) {
         super(e.id, e.account_id, BotEventSource.DELEGATION);
@@ -216,6 +287,9 @@ export interface Project {
     repositoryUrl:string,
     assignedQa:string,
     discordChannelIds: string[],
+    slackChannelIds?: string[],
+    teamsChannelIds?: string[],
+    radChannelIds?: string[],
     gitKeyId?: string,
     createdAt:string, //Datetime string
     updatedAt:string //Datetime string

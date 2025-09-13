@@ -4,47 +4,69 @@ But that still leaves the issue of how GUI.ts can share configmanager.ts with  A
 
 ```bash
 ================================
+GEMINI CLI
+================================
++1. Change output of mismatching function calls to STDERR so they dont output. This issue still exists and shouldnt be lost, but doesnt need to be seen by users.
++ Rebuild gemini-docker to deploy fix
+
+2. Issues with Retry [non-critical]
+
+================================
 SHOW STOPPING - BACKEND MASTER SERVER ISSUES
 ================================
-+- ORDER OF OPERATIONS ISSUE for QA [ commt/push Dockerfile, then DEPLOY ]  (post-commit hook? allow push w/ git credentials? not sure because we dont wawnt them 
+- Give QA direct access to logs and deployment stuff (GCLOUD?)  [First show logs in the Zulu-WWW]
 
 ***Non-Public deployment issue  [for staging sites] MUST BE PERMANENTLY FIXED AND THE DEFAULT SERVICE ACCT DISABLED ! fixed temporarily using the default service account, but this is problematic security wise. temp fix needs testing.***
 ***Issue with deployment security and using the default security account***
-***Traefik so they dont HAVE to be public [see non-public deployment issue]***
+***Traefik so they dont HAVE to be public [see non-public deployment issue]*
 
 
++- ORDER OF OPERATIONS ISSUE for QA [ commt/push Dockerfile, then DEPLOY ]  (post-commit hook? allow push w/ git credentials? not sure because we dont wawnt them 
++ Write secrets to our own tables as well as to gcloud. We need to track version history for secrets? Uh, maybe this isnt needed. Can't we just rely on gcloud to get the secrets data and show it in the UI? Better not to have two sources of truth?
 + Non Secret deployment stopped working ? Doesnt seem like it, was just a broken dockerfile in Tetris directory.
 +- Bot Invites!
 working on the wrong branch)
 +- BuildServer-Docker Pooling
-
-> We need to create a pool of buildserver containers per the //FIXME: Later we can create a 'pool' of build servers for efficiency. This ppool can       │
-│    expand or contract if more build servers are needed at a time, and can start at size 0, but the idea is that all accounts can share the same pool,     │
-│    rather than them using buildserver+'account_id'. We will need to mark which ones are in use. The Map can be simply buildServerPool: Map<string, {      │
-│    info: ContainerInfo, inuse: boolean, lastUse: number [timestamp]  } > and the containerNames can be generated as simply: 'buildserver-'+randomUUID .   │
-│    We will need to run docker.ps()  before running a build command, to detect which build servers are still avaialble to update the buildServerPool and   │
-│    select a server or decide we need a new one, since they may have gone away due to timeout of the websocket connection.   
-
+> We need to create a pool of buildserver containers per the //FIXME: Later we can create a 'pool' of build servers for efficiency. This ppool can 
+  expand or contract if more build servers are needed at a time, and can start at size 0, but the idea is that all accounts can share the same pool, 
+  rather than them using buildserver+'account_id'. We will need to mark which ones are in use. The Map can be simply buildServerPool: Map<string, {
+  info: ContainerInfo, inuse: boolean, lastUse: number [timestamp]  } > and the containerNames can be generated as simply: 'buildserver-'+randomUUID .
+  We will need to run docker.ps()  before running a build command, to detect which build servers are still avaialble to update the buildServerPool and
+  select a server or decide we need a new one, since they may have gone away due to timeout of the websocket connection.   
 + Support metadata commits (Can we support commits calling the server to do a push, and returning control without interrupting the bot? use setuid as git user?)
-
-- Give QA direct access to logs and deployment stuff (GCLOUD?)
-
-..........
 
 
 
 ================================
 SHOW STOPPING - WEB
 ================================
+
+Rebrand the site RADSUITE.  Deploy it with custom domain (requires Traefik?)
 HAVE THE RADSuite website with information of what we offer.
 
-  
+- Team Invites  [ NEEDS TESTING ]
+- Initial Platform setup [ needs testing!]. We need to make sure all the editing features work for site. 
+   - Secrets
+   - Enviroments
+   - Logs
 
-- Team Invites
+BILLING
 
-- Platform Invites [a Whitelist for non-invited users by email address, eg, account creators]
+- Fixing UI stuff w/ new Vue# interface
+- Visualize/Support Role 'inheritance' from master account
+  - Github integration [to create new repository or link to one]
+  - Add Git Key [generate with github, inline with project setup]
 
-+- Bot Invites [how does this work with the MASTER SERVER?]
+- Onboarding flow for new account
+  - Create a bot instance and invite it to a guild / server.
+  - Authorize the bot! [test if completed]
+  - Setup your first project
+  - Deploy a Staging Environment!
+  - Invite teammates  
+  - Go to Production! [not yet supported]
+
+
+
 
 - Record Bot Logs and UI for reading Bot logs (w/ realtime output detailed log so you can know WTF is going on under the hood like I do)
 - Record Deployments so we know what deployed environments exist on google cloud run, in the environments table
@@ -58,9 +80,13 @@ HAVE THE RADSuite website with information of what we offer.
 - SECRETS MANAGEMENT VIA GUI (per PROJECT & ENVIROMENT), because bots cannot reasonably handle updating them without making mistakes ...
 ...not totally show stopping...
 
-- Fixing UI stuff w/ new Vue# interface
 
-- Visualize/Support Role 'inheritance' from master account
+
++ Platform Invites [a Whitelist for non-invited users by email address, eg, account creators]  [TESTED, UX can be improved!]
++- Bot Invites [how does this work with the MASTER SERVER?]
+
+
+
 
 ===================================================================================================================================
 
@@ -95,10 +121,18 @@ NON-SHOW STOPPING?
 ===============================
 - Automatic spinup of git and/or connection to your github account!
 - CUSTOM DOMAINS!
+/- SUPPORT EMAIL, SLACK, MICROSOFT TEAMS, other?
 - GITHUB_PAT support in addition to SSH_KEY!
 
-+ Commits / Branching / Messages 
 
+/....
+SlashRAD integrated javascript chatbot fixer on the deployed staging website... could it be multiplayer / team oriented with hot reload?  ...That'd be pretty cool
+ - the /rad endpoint can iframe the / homepage of the site, but overlay the chat interfaces.
+ - we could also support a 'rad proxy' which would allow dynamic testing of adaptive site / AI AB Testing
+ - Either using javascript or an actual proxy capability like Traefik
+ 
+=====================================
++ Commits / Branching / Messages 
 - CI/CD autoworkflow / how/when to clear branches [ delete them after they have been successfully merged into main branch]
 - Tagging releases and versioning
 
@@ -108,7 +142,6 @@ NON-SHOW STOPPING?
 - Website area (logged in, public) where you can chat with the bots on per project-channel without being in discord/slack etc.
 
 
-- SUPPORT EMAIL, SLACK, MICROSOFT TEAMS, other?
 - AUDIO
 - INTERACT W/ BOT ON WEBSITE
 
@@ -116,12 +149,10 @@ NON-SHOW STOPPING?
 / QA / Testing Process w/ integrated deploy
 + Staging/Prod deploys
 
+...RADCommander Gamified Warcraft3 Style Bot Management UX
 
-/SlashRAD integrated javascript chatbot fixer on the deployed staging website
-RADCommander Gamified Warcraft3 Style Bot Management UX
+
 ================================
-
-
 +a.	PROJECT MOUNTING SYSTEM
  -  We need to support having SSH keys and mounting the GIT Repos for the bots. 
 +b.	Commits and branches such
